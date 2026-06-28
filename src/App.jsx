@@ -656,7 +656,7 @@ function SyncBar({ pendingCount, syncStatus, loadError, onRetry }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: loadError ? C.red : C.amber }}>
         {loadError ? <AlertCircle size={13} /> : <CloudUpload size={13} />}
         {loadError
-          ? `Couldn't reach the server — showing last known data`
+          ? `Couldn't reach the server: "${loadError}" — showing last known data`
           : `${pendingCount} sale${pendingCount === 1 ? '' : 's'} saved offline, ${syncStatus === 'syncing' ? 'syncing now…' : 'waiting to sync'}`
         }
       </div>
@@ -728,6 +728,9 @@ function Header({ business, onLogout }) {
         <div style={{ fontFamily: FONT_DISPLAY, fontSize: 24, fontWeight: 600, letterSpacing: '0.02em', textTransform: 'uppercase', lineHeight: 1 }}>
           {business?.name || 'Your Business'}
         </div>
+        {business?.address && (
+          <div style={{ fontSize: 11, color: C.paperDim, marginTop: 3 }}>{business.address}</div>
+        )}
         <div style={{ fontSize: 11, color: C.paperDim, marginTop: 3, display: 'flex', alignItems: 'center', gap: 5 }}>
           <Server size={11} /> Connected to live backend
         </div>
