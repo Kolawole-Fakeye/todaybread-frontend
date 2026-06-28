@@ -3,7 +3,7 @@ import {
   Fuel, Droplet, Package, TrendingUp, TrendingDown, AlertTriangle,
   RefreshCw, MessageCircle, Lock, Clock, ChevronRight, Plus, Minus,
   ShoppingCart, BarChart3, Wallet, Boxes, Wrench, Link2, Check, Sparkles, ArrowUp, ArrowDown, Timer, ArchiveX, Award,
-  Wifi, WifiOff, LogOut, Server, CloudUpload, AlertCircle
+  Wifi, WifiOff, LogOut, Server, CloudUpload, AlertCircle, Users
 } from 'lucide-react';
 
 /* ---------------------------------------------------------------
@@ -222,7 +222,7 @@ export default function TodayBread() {
   const [dataLoaded, setDataLoaded] = useState(false);
   const [syncStatus, setSyncStatus] = useState('idle'); // idle | syncing | error
   const [loadError, setLoadError] = useState('');
-  const [tab, setTab] = useState('inventory');
+  const [tab, setTab] = useState('reports');
   const [now, setNow] = useState(new Date());
   const [rates, setRates] = useState(null);
   const [rateLoading, setRateLoading] = useState(false);
@@ -319,6 +319,13 @@ export default function TodayBread() {
 
   const lowStockItems = useMemo(() => inventory.filter(i => i.stock <= i.reorder), [inventory]);
 
+  // staff never have access to owner-only tabs — fall back to Record Sale if one is somehow active
+  useEffect(() => {
+    if (dataLoaded && role === 'staff' && !['sale', 'inventory', 'analytics'].includes(tab)) {
+      setTab('sale');
+    }
+  }, [dataLoaded, role, tab]);
+
   // record a sale — try live, fall back to offline queue if the network call fails
   const recordSale = async (itemId, qty, payment) => {
     const item = inventory.find(i => i.id === itemId);
@@ -376,6 +383,7 @@ export default function TodayBread() {
   };
 
   const handleLogout = () => setAuth(null);
+  const [authMode, setAuthMode] = useState('login');
 
   if (!apiUrlLoaded || !authLoaded || !pendingLoaded) {
     return <LoadingScreen />;
@@ -384,7 +392,9 @@ export default function TodayBread() {
     return <ApiSetupScreen onSave={setApiUrl} />;
   }
   if (!auth) {
-    return <LoginScreen apiUrl={apiUrl} onLogin={setAuth} onChangeApiUrl={() => setApiUrl(null)} />;
+    return authMode === 'signup'
+      ? <SignupScreen apiUrl={apiUrl} onSignup={setAuth} onBackToLogin={() => setAuthMode('login')} />
+      : <LoginScreen apiUrl={apiUrl} onLogin={setAuth} onChangeApiUrl={() => setApiUrl(null)} onShowSignup={() => setAuthMode('signup')} />;
   }
   if (!dataLoaded) {
     return <LoadingScreen />;
@@ -426,6 +436,9 @@ export default function TodayBread() {
         )}
         {tab === 'whatsapp' && role === 'owner' && (
           <WhatsAppView sales={sales} inventory={inventory} lowStockItems={lowStockItems} />
+        )}
+        {tab === 'staff' && role === 'owner' && (
+          <StaffView apiUrl={apiUrl} token={token} />
         )}
       </div>
     </div>
@@ -488,7 +501,7 @@ function ApiSetupScreen({ onSave }) {
   );
 }
 
-function LoginScreen({ apiUrl, onLogin, onChangeApiUrl }) {
+function LoginScreen({ apiUrl, onLogin, onChangeApiUrl, onShowSignup }) {
   const [phone, setPhone] = useState('');
   const [pin, setPin] = useState('');
   const [error, setError] = useState('');
@@ -535,10 +548,97 @@ function LoginScreen({ apiUrl, onLogin, onChangeApiUrl }) {
           {loading ? 'Signing in…' : 'Sign in'}
         </button>
         <button
+          onClick={onShowSignup}
+          style={{ width: '100%', padding: '10px 0', borderRadius: 8, border: `1px solid ${C.line}`, background: 'transparent', color: C.amber, fontSize: 13, fontWeight: 600, cursor: 'pointer', marginBottom: 10 }}
+        >
+          New shop? Create your business
+        </button>
+        <button
           onClick={onChangeApiUrl}
           style={{ width: '100%', padding: '8px 0', borderRadius: 8, border: 'none', background: 'transparent', color: C.paperDim, fontSize: 12, cursor: 'pointer' }}
         >
           Change backend URL
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function SignupScreen({ apiUrl, onSignup, onBackToLogin }) {
+  const [form, setForm] = useState({ businessName: '', ownerName: '', phone: '', pin: '', whatsappNumber: '' });
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const set = (key, val) => setForm(f => ({ ...f, [key]: val }));
+
+  const handleSignup = async () => {
+    if (!form.businessName.trim()) return setError('Business name is required');
+    if (!form.ownerName.trim()) return setError('Your name is required');
+    if (!form.phone.trim()) return setError('Phone number is required');
+    if (!form.pin || form.pin.length < 4) return setError('Choose a PIN of at least 4 digits');
+    setLoading(true);
+    setError('');
+    try {
+      const data = await apiRequest(apiUrl, '/auth/signup', {
+        method: 'POST',
+        body: {
+          businessName: form.businessName.trim(),
+          ownerName: form.ownerName.trim(),
+          phone: form.phone.trim(),
+          pin: form.pin,
+          whatsappNumber: form.whatsappNumber.trim() || form.phone.trim(),
+        },
+      });
+      await onSignup({ token: data.token, user: data.user, business: data.business });
+    } catch (e) {
+      setError(e.message || 'Could not create your business');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const inputStyle = {
+    width: '100%', padding: '11px 12px', borderRadius: 8, border: `1px solid ${C.line}`,
+    background: C.panel, color: C.paper, fontFamily: FONT_BODY, fontSize: 13, marginTop: 6, marginBottom: 12,
+  };
+  const labelStyle = { fontSize: 11, color: C.paperDim, fontWeight: 600 };
+
+  return (
+    <div style={{ background: C.ink, minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, fontFamily: FONT_BODY }}>
+      <div style={{ maxWidth: 360, width: '100%' }}>
+        <div style={{ fontFamily: FONT_DISPLAY, fontSize: 24, color: C.paper, textTransform: 'uppercase', marginBottom: 6 }}>
+          Today<span style={{ color: C.amber }}>Bread</span>
+        </div>
+        <div style={{ color: C.paperDim, fontSize: 13, marginBottom: 20 }}>Set up your shop on TodayBread.</div>
+
+        <label style={labelStyle}>Business name</label>
+        <input style={inputStyle} value={form.businessName} onChange={e => set('businessName', e.target.value)} placeholder="e.g. Apex Autos Limited" />
+
+        <label style={labelStyle}>Your name</label>
+        <input style={inputStyle} value={form.ownerName} onChange={e => set('ownerName', e.target.value)} placeholder="e.g. Kola Fakeye" />
+
+        <label style={labelStyle}>Phone number (this is your login)</label>
+        <input style={inputStyle} value={form.phone} onChange={e => set('phone', e.target.value)} placeholder="2348012345678" />
+
+        <label style={labelStyle}>Choose a PIN</label>
+        <input style={inputStyle} type="password" value={form.pin} onChange={e => set('pin', e.target.value)} placeholder="At least 4 digits" />
+
+        <label style={labelStyle}>WhatsApp number for daily summary (optional)</label>
+        <input style={inputStyle} value={form.whatsappNumber} onChange={e => set('whatsappNumber', e.target.value)} placeholder="Leave blank to use phone number above" />
+
+        {error && <div style={{ color: C.red, fontSize: 12, marginBottom: 12 }}>{error}</div>}
+
+        <button
+          onClick={handleSignup} disabled={loading}
+          style={{ width: '100%', padding: '12px 0', borderRadius: 8, border: 'none', background: C.amber, color: C.ink, fontWeight: 700, fontSize: 14, cursor: 'pointer', marginBottom: 10 }}
+        >
+          {loading ? 'Creating your business…' : 'Create business'}
+        </button>
+        <button
+          onClick={onBackToLogin}
+          style={{ width: '100%', padding: '8px 0', borderRadius: 8, border: 'none', background: 'transparent', color: C.paperDim, fontSize: 12, cursor: 'pointer' }}
+        >
+          Already have an account? Sign in
         </button>
       </div>
     </div>
@@ -648,12 +748,13 @@ function Header({ business, onLogout }) {
 
 function TabBar({ role, tab, setTab, lowStockCount }) {
   const tabs = [
-    { id: 'inventory', label: 'Inventory', icon: Package },
-    { id: 'sale', label: 'Record Sale', icon: ShoppingCart },
-    { id: 'analytics', label: 'Best Sellers', icon: BarChart3 },
+    ...(role === 'owner' ? [{ id: 'reports', label: 'Today', icon: Wallet }] : []),
     ...(role === 'owner' ? [{ id: 'insights', label: 'Insights', icon: Sparkles }] : []),
-    ...(role === 'owner' ? [{ id: 'reports', label: 'Reports', icon: Wallet }] : []),
+    { id: 'analytics', label: 'Best Sellers', icon: BarChart3 },
+    { id: 'sale', label: 'Record Sale', icon: ShoppingCart },
+    { id: 'inventory', label: 'Inventory', icon: Package },
     ...(role === 'owner' ? [{ id: 'whatsapp', label: 'WhatsApp', icon: MessageCircle }] : []),
+    ...(role === 'owner' ? [{ id: 'staff', label: 'Staff', icon: Users }] : []),
   ];
   return (
     <div style={{ display: 'flex', overflowX: 'auto', borderBottom: `1px solid ${C.line}`, maxWidth: 720, margin: '0 auto', padding: '0 16px' }}>
@@ -1368,3 +1469,112 @@ function WhatsAppView({ sales, inventory, lowStockItems }) {
     </div>
   );
 }
+
+function StaffView({ apiUrl, token }) {
+  const [staff, setStaff] = useState(null);
+  const [error, setError] = useState('');
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({ name: '', phone: '', pin: '' });
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState('');
+
+  const loadStaff = useCallback(async () => {
+    try {
+      const data = await apiRequest(apiUrl, '/auth/staff', { token });
+      setStaff(data.staff);
+    } catch (e) {
+      setError(e.message);
+    }
+  }, [apiUrl, token]);
+
+  useEffect(() => { loadStaff(); }, [loadStaff]);
+
+  const handleAdd = async () => {
+    if (!form.name.trim()) return setFormError('Name is required');
+    if (!form.phone.trim()) return setFormError('Phone number is required');
+    if (!form.pin || form.pin.length < 4) return setFormError('PIN must be at least 4 digits');
+    setSaving(true);
+    setFormError('');
+    try {
+      await apiRequest(apiUrl, '/auth/staff', { method: 'POST', token, body: { name: form.name.trim(), phone: form.phone.trim(), pin: form.pin } });
+      setForm({ name: '', phone: '', pin: '' });
+      setShowForm(false);
+      await loadStaff();
+    } catch (e) {
+      setFormError(e.message || 'Could not create staff account');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const inputStyle = {
+    width: '100%', padding: '9px 10px', borderRadius: 7, border: `1px solid ${C.line}`,
+    background: C.ink, color: C.paper, fontFamily: FONT_BODY, fontSize: 13, marginTop: 4,
+  };
+  const labelStyle = { fontSize: 11, color: C.paperDim, fontWeight: 600 };
+
+  return (
+    <div>
+      <div style={{ fontFamily: FONT_DISPLAY, fontSize: 16, textTransform: 'uppercase', letterSpacing: '0.02em', color: C.paperDim, marginBottom: 12 }}>
+        Staff accounts
+      </div>
+
+      {!showForm && (
+        <button
+          onClick={() => setShowForm(true)}
+          style={{
+            width: '100%', padding: '11px 0', borderRadius: 8, border: `1px dashed ${C.amber}66`, background: `${C.amber}14`,
+            color: C.amber, fontFamily: FONT_BODY, fontWeight: 700, fontSize: 13, cursor: 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, marginBottom: 16,
+          }}
+        >
+          <Plus size={15} /> Add staff member
+        </button>
+      )}
+
+      {showForm && (
+        <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 10, padding: 14, marginBottom: 16 }}>
+          <label style={labelStyle}>Staff name</label>
+          <input style={inputStyle} value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Chidi Okafor" />
+          <label style={{ ...labelStyle, display: 'block', marginTop: 10 }}>Phone number (their login)</label>
+          <input style={inputStyle} value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} placeholder="2348099998888" />
+          <label style={{ ...labelStyle, display: 'block', marginTop: 10 }}>Set their PIN</label>
+          <input style={inputStyle} type="password" value={form.pin} onChange={e => setForm(f => ({ ...f, pin: e.target.value }))} placeholder="At least 4 digits" />
+          {formError && <div style={{ color: C.red, fontSize: 12, marginTop: 8 }}>{formError}</div>}
+          <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+            <button
+              onClick={() => { setShowForm(false); setFormError(''); }}
+              style={{ flex: 1, padding: '10px 0', borderRadius: 8, border: `1px solid ${C.line}`, background: 'transparent', color: C.paperDim, fontWeight: 700, fontSize: 13, cursor: 'pointer' }}
+            >Cancel</button>
+            <button
+              onClick={handleAdd} disabled={saving}
+              style={{ flex: 1, padding: '10px 0', borderRadius: 8, border: 'none', background: C.amber, color: C.ink, fontWeight: 700, fontSize: 13, cursor: 'pointer' }}
+            >{saving ? 'Adding…' : 'Add staff'}</button>
+          </div>
+        </div>
+      )}
+
+      {error && <div style={{ color: C.red, fontSize: 12, marginBottom: 12 }}>{error}</div>}
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {staff === null && <div style={{ color: C.paperDim, fontSize: 13 }}>Loading staff…</div>}
+        {staff?.length === 0 && (
+          <div style={{ textAlign: 'center', padding: '30px 16px', color: C.paperDim }}>
+            <Users size={26} style={{ marginBottom: 10, opacity: 0.5 }} />
+            <div style={{ fontSize: 13 }}>No staff accounts yet. Add one above — they'll log in with the same site URL using their own phone and PIN.</div>
+          </div>
+        )}
+        {staff?.map(s => (
+          <div key={s.id} style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 10, padding: '12px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>{s.name}</div>
+              <div style={{ fontSize: 11, color: C.paperDim, marginTop: 2, fontFamily: FONT_MONO }}>{s.phone}</div>
+            </div>
+            <Tag color={C.blue}>Staff</Tag>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
