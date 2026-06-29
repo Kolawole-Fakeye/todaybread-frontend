@@ -1042,8 +1042,13 @@ function SaleView({ inventory, onSubmit }) {
 
   return (
     <div>
-      <div style={{ fontFamily: FONT_DISPLAY, fontSize: 16, textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 12, color: C.paperDim }}>
-        Record a sale
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 12 }}>
+        <div style={{ fontFamily: FONT_DISPLAY, fontSize: 16, textTransform: 'uppercase', letterSpacing: '0.03em', color: C.paperDim }}>
+          Record a sale
+        </div>
+        <div style={{ fontFamily: FONT_MONO, fontSize: 11, color: C.paperDim }}>
+          {new Date().toLocaleDateString('en-NG', { weekday: 'short', day: 'numeric', month: 'short' })}
+        </div>
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 14 }}>
@@ -1216,8 +1221,13 @@ function ReportsView({ sales, inventory }) {
         background: `linear-gradient(135deg, ${C.panel}, ${C.panel2})`, border: `1px solid ${C.amber}33`,
         borderRadius: 12, padding: 16, marginBottom: 16,
       }}>
-        <div style={{ fontSize: 10, color: C.paperDim, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>
-          Today at a glance
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 10 }}>
+          <div style={{ fontSize: 10, color: C.paperDim, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+            Today at a glance
+          </div>
+          <div style={{ fontFamily: FONT_MONO, fontSize: 11, color: C.paperDim }}>
+            {new Date().toLocaleDateString('en-NG', { weekday: 'short', day: 'numeric', month: 'short' })}
+          </div>
         </div>
         <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap' }}>
           <div>
