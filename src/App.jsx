@@ -222,7 +222,7 @@ export default function TodayBread() {
   const [dataLoaded, setDataLoaded] = useState(false);
   const [syncStatus, setSyncStatus] = useState('idle'); // idle | syncing | error
   const [loadError, setLoadError] = useState('');
-  const [tab, setTab] = useState('reports');
+  const [tab, setTab] = useState('sale');
   const [now, setNow] = useState(new Date());
   const [rates, setRates] = useState(null);
   const [rateLoading, setRateLoading] = useState(false);
@@ -324,7 +324,10 @@ export default function TodayBread() {
     if (dataLoaded && role === 'staff' && !['sale', 'inventory', 'analytics'].includes(tab)) {
       setTab('sale');
     }
-  }, [dataLoaded, role, tab]);
+    if (dataLoaded && role === 'owner' && tab === 'sale') {
+      setTab('reports');
+    }
+  }, [dataLoaded, role]);
 
   // record a sale — try live, fall back to offline queue if the network call fails
   const recordSale = async (itemId, qty, payment) => {
@@ -1025,24 +1028,52 @@ function ItemForm({ item, existingIds, onSave, onDelete, onCancel }) {
 }
 
 function SaleView({ inventory, onSubmit }) {
-  const [itemId, setItemId] = useState(inventory[0]?.id);
+  const [search, setSearch] = useState('');
+  const [itemId, setItemId] = useState(null);
   const [qty, setQty] = useState(1);
   const [payment, setPayment] = useState('Cash');
   const [confirmed, setConfirmed] = useState(false);
-  const item = inventory.find(i => i.id === itemId);
+  const [showDropdown, setShowDropdown] = useState(false);
+
   const available = inventory.filter(i => i.stock > 0);
+  const item = available.find(i => i.id === itemId);
+
+  const filtered = search.trim().length > 0
+    ? available.filter(i =>
+        i.name.toLowerCase().includes(search.toLowerCase()) ||
+        i.brand.toLowerCase().includes(search.toLowerCase()) ||
+        i.category.toLowerCase().includes(search.toLowerCase()) ||
+        i.id.toLowerCase().includes(search.toLowerCase())
+      )
+    : available;
+
+  const selectItem = (i) => {
+    setItemId(i.id);
+    setSearch(i.name);
+    setShowDropdown(false);
+    setQty(1);
+  };
+
+  const clearItem = () => {
+    setItemId(null);
+    setSearch('');
+    setShowDropdown(false);
+    setQty(1);
+  };
 
   const submit = () => {
     if (!item || qty < 1 || qty > item.stock) return;
     onSubmit(itemId, qty, payment);
     setConfirmed(true);
     setQty(1);
+    setItemId(null);
+    setSearch('');
     setTimeout(() => setConfirmed(false), 1800);
   };
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 16 }}>
         <div style={{ fontFamily: FONT_DISPLAY, fontSize: 16, textTransform: 'uppercase', letterSpacing: '0.03em', color: C.paperDim }}>
           Record a sale
         </div>
@@ -1051,36 +1082,88 @@ function SaleView({ inventory, onSubmit }) {
         </div>
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 14 }}>
-        {available.map(i => {
-          const active = i.id === itemId;
-          return (
+      {/* Search / type to find item */}
+      <div style={{ position: 'relative', marginBottom: 14 }}>
+        <div style={{ fontSize: 11, color: C.paperDim, fontWeight: 600, marginBottom: 5 }}>
+          Search item by name, brand or category
+        </div>
+        <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+          <input
+            value={search}
+            onChange={e => { setSearch(e.target.value); setItemId(null); setShowDropdown(true); }}
+            onFocus={() => setShowDropdown(true)}
+            placeholder="e.g. Castrol, brake fluid, engine oil…"
+            style={{
+              width: '100%', padding: '11px 36px 11px 12px', borderRadius: 8,
+              border: `1px solid ${item ? C.amber : C.line}`,
+              background: C.panel, color: C.paper, fontFamily: FONT_BODY, fontSize: 13,
+            }}
+          />
+          {(search || item) && (
             <button
-              key={i.id}
-              onClick={() => setItemId(i.id)}
-              style={{
-                textAlign: 'left', padding: '10px 12px', borderRadius: 8, cursor: 'pointer',
-                border: `1px solid ${active ? C.amber : C.line}`,
-                background: active ? `${C.amber}1A` : C.panel,
-                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-              }}
-            >
-              <div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: C.paper }}>{i.name}</div>
-                <div style={{ fontSize: 11, color: C.paperDim }}>{i.size} · {i.stock} in stock</div>
-              </div>
-              <div style={{ fontFamily: FONT_MONO, fontSize: 13, fontWeight: 700, color: C.amber }}>{naira(i.price)}</div>
-            </button>
-          );
-        })}
+              onClick={clearItem}
+              style={{ position: 'absolute', right: 10, background: 'none', border: 'none', color: C.paperDim, cursor: 'pointer', fontSize: 16, lineHeight: 1 }}
+            >×</button>
+          )}
+        </div>
+
+        {/* Dropdown results */}
+        {showDropdown && search.trim().length > 0 && !item && (
+          <div style={{
+            position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 100,
+            background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 8,
+            maxHeight: 260, overflowY: 'auto', marginTop: 4,
+            boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
+          }}>
+            {filtered.length === 0 && (
+              <div style={{ padding: '12px 14px', color: C.paperDim, fontSize: 13 }}>No items match "{search}"</div>
+            )}
+            {filtered.map(i => (
+              <button
+                key={i.id}
+                onClick={() => selectItem(i)}
+                style={{
+                  width: '100%', textAlign: 'left', padding: '10px 14px', background: 'none',
+                  border: 'none', borderBottom: `1px solid ${C.line}`, cursor: 'pointer',
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                }}
+              >
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: C.paper }}>{i.name}</div>
+                  <div style={{ fontSize: 11, color: C.paperDim, marginTop: 2 }}>{i.brand} · {i.size} · {i.stock} in stock</div>
+                </div>
+                <div style={{ fontFamily: FONT_MONO, fontSize: 12, fontWeight: 700, color: C.amber, flexShrink: 0, marginLeft: 10 }}>{naira(i.price)}</div>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
+
+      {/* Selected item summary */}
+      {item && (
+        <div style={{ background: `${C.amber}14`, border: `1px solid ${C.amber}44`, borderRadius: 8, padding: '10px 12px', marginBottom: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>{item.name}</div>
+          <div style={{ fontSize: 11, color: C.paperDim, marginTop: 2 }}>{item.brand} · {item.size} · {item.stock} in stock</div>
+        </div>
+      )}
 
       {item && (
         <>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 14 }}>
             <span style={{ fontSize: 12, color: C.paperDim, fontWeight: 600 }}>Quantity</span>
             <button onClick={() => setQty(q => Math.max(1, q - 1))} style={qtyBtnStyle}><Minus size={14} /></button>
-            <span style={{ fontFamily: FONT_MONO, fontSize: 18, fontWeight: 700, minWidth: 24, textAlign: 'center' }}>{qty}</span>
+            <input
+              type="number"
+              value={qty}
+              min={1}
+              max={item.stock}
+              onChange={e => setQty(Math.max(1, Math.min(item.stock, Number(e.target.value) || 1)))}
+              style={{
+                width: 60, textAlign: 'center', padding: '6px 8px', borderRadius: 6,
+                border: `1px solid ${C.line}`, background: C.ink, color: C.paper,
+                fontFamily: FONT_MONO, fontSize: 18, fontWeight: 700,
+              }}
+            />
             <button onClick={() => setQty(q => Math.min(item.stock, q + 1))} style={qtyBtnStyle}><Plus size={14} /></button>
           </div>
 
