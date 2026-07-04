@@ -278,7 +278,9 @@ export default function TodayBread() {
       ]);
       const mappedInventory = invRes.items.map(i => ({
         id: i.sku, dbId: i.id, name: i.name, brand: i.brand, size: i.size, category: i.category,
-        cost: Number(i.cost_price || 0), price: Number(i.sale_price), stock: i.stock, reorder: i.reorder_level, origin: i.origin,
+        cost: Number(i.cost_price || 0), price: Number(i.sale_price), stock: i.stock,
+        warehouseStock: i.warehouse_stock != null ? Number(i.warehouse_stock) : null,
+        reorder: i.reorder_level, origin: i.origin,
       }));
       const mappedSales = salesRes.sales.map(s => ({
         id: s.id, itemId: s.item_id, itemName: s.item_name, qty: s.qty,
@@ -356,7 +358,8 @@ export default function TodayBread() {
         const res = await apiRequest(apiUrl, '/inventory', {
           method: 'POST', token, body: {
             sku: formItem.id, name: formItem.name, brand: formItem.brand, size: formItem.size, category: formItem.category,
-            costPrice: formItem.cost, salePrice: formItem.price, stock: formItem.stock, reorderLevel: formItem.reorder, origin: formItem.origin,
+            costPrice: formItem.cost, salePrice: formItem.price, stock: formItem.stock,
+            warehouseStock: formItem.warehouseStock || 0, reorderLevel: formItem.reorder, origin: formItem.origin,
           },
         });
         setInventoryLocal(inv => [...inv, { ...formItem, dbId: res.item.id }]);
@@ -364,7 +367,8 @@ export default function TodayBread() {
         await apiRequest(apiUrl, `/inventory/${formItem.dbId}`, {
           method: 'PUT', token, body: {
             name: formItem.name, brand: formItem.brand, size: formItem.size, category: formItem.category,
-            costPrice: formItem.cost, salePrice: formItem.price, stock: formItem.stock, reorderLevel: formItem.reorder, origin: formItem.origin,
+            costPrice: formItem.cost, salePrice: formItem.price, stock: formItem.stock,
+            warehouseStock: formItem.warehouseStock || 0, reorderLevel: formItem.reorder, origin: formItem.origin,
           },
         });
         setInventoryLocal(inv => inv.map(i => i.id === formItem.id ? formItem : i));
@@ -383,6 +387,17 @@ export default function TodayBread() {
     } catch (e) {
       alert(`Could not delete: ${e.message}`);
     }
+  };
+
+  const clearAllItems = async () => {
+    for (const item of inventory) {
+      try {
+        await apiRequest(apiUrl, `/inventory/${item.dbId}`, { method: 'DELETE', token });
+      } catch (e) {
+        console.error('Could not delete item', item.id, e.message);
+      }
+    }
+    setInventoryLocal([]);
   };
 
   const handleLogout = () => setAuth(null);
@@ -423,10 +438,10 @@ export default function TodayBread() {
 
       <div style={{ padding: '16px', maxWidth: 720, margin: '0 auto' }}>
         {tab === 'inventory' && (
-          <InventoryView inventory={inventory} role={role} onSave={saveItem} onDelete={deleteItem} />
+          <InventoryView inventory={inventory} role={role} onSave={saveItem} onDelete={deleteItem} onClearAll={clearAllItems} />
         )}
         {tab === 'sale' && (
-          <SaleView inventory={inventory} onSubmit={recordSale} />
+          <SaleView inventory={inventory} onSubmit={recordSale} sales={sales} />
         )}
         {tab === 'analytics' && (
           <AnalyticsView sales={sales} role={role} />
@@ -802,9 +817,11 @@ function Tag({ children, color }) {
   );
 }
 
-function InventoryView({ inventory, role, onSave, onDelete }) {
+function InventoryView({ inventory, role, onSave, onDelete, onClearAll }) {
   const [filter, setFilter] = useState('All');
-  const [editingItem, setEditingItem] = useState(undefined); // undefined=closed, null=adding new, object=editing
+  const [editingItem, setEditingItem] = useState(undefined);
+  const [confirmClearAll, setConfirmClearAll] = useState(false);
+  const [clearing, setClearing] = useState(false);
   const categories = ['All', ...new Set(inventory.map(i => i.category))];
   const items = filter === 'All' ? inventory : inventory.filter(i => i.category === filter);
 
@@ -818,42 +835,60 @@ function InventoryView({ inventory, role, onSave, onDelete }) {
     setEditingItem(undefined);
   };
 
+  const handleClearAll = async () => {
+    setClearing(true);
+    await onClearAll();
+    setClearing(false);
+    setConfirmClearAll(false);
+  };
+
   return (
     <div>
       {role === 'owner' && (
-        <button
-          onClick={() => setEditingItem(null)}
-          style={{
-            width: '100%', padding: '11px 0', borderRadius: 8, border: `1px dashed ${C.amber}66`, background: `${C.amber}14`,
-            color: C.amber, fontFamily: FONT_BODY, fontWeight: 700, fontSize: 13, cursor: 'pointer',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, marginBottom: 14,
-          }}
-        >
-          <Plus size={15} /> Add inventory item
-        </button>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+          <button
+            onClick={() => setEditingItem(null)}
+            style={{
+              flex: 1, padding: '11px 0', borderRadius: 8, border: `1px dashed ${C.amber}66`, background: `${C.amber}14`,
+              color: C.amber, fontFamily: FONT_BODY, fontWeight: 700, fontSize: 13, cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+            }}
+          >
+            <Plus size={15} /> Add item
+          </button>
+          {inventory.length > 0 && (
+            <button
+              onClick={() => setConfirmClearAll(true)}
+              style={{ padding: '11px 14px', borderRadius: 8, border: `1px solid ${C.red}44`, background: 'transparent', color: C.red, fontFamily: FONT_BODY, fontWeight: 600, fontSize: 12, cursor: 'pointer', flexShrink: 0 }}
+            >Clear all</button>
+          )}
+        </div>
+      )}
+
+      {confirmClearAll && (
+        <div style={{ background: `${C.red}18`, border: `1px solid ${C.red}55`, borderRadius: 10, padding: 14, marginBottom: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>Delete all {inventory.length} inventory items?</div>
+          <div style={{ fontSize: 12, color: C.paperDim, marginBottom: 12 }}>This cannot be undone. Use this to clear demo data before entering your real inventory.</div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={() => setConfirmClearAll(false)} style={{ flex: 1, padding: '9px 0', borderRadius: 8, border: `1px solid ${C.line}`, background: 'transparent', color: C.paperDim, fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>Cancel</button>
+            <button onClick={handleClearAll} disabled={clearing} style={{ flex: 1, padding: '9px 0', borderRadius: 8, border: 'none', background: C.red, color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>{clearing ? 'Clearing…' : 'Yes, delete all'}</button>
+          </div>
+        </div>
+      )}
+
+      {inventory.length === 0 && (
+        <div style={{ textAlign: 'center', padding: '40px 16px', color: C.paperDim }}>
+          <Package size={28} style={{ marginBottom: 10, opacity: 0.5 }} />
+          <div style={{ fontSize: 14, fontWeight: 600, color: C.paper, marginBottom: 6 }}>No inventory yet</div>
+          <div style={{ fontSize: 13 }}>Tap <b style={{ color: C.amber }}>+ Add item</b> to start building your real product catalogue.</div>
+        </div>
       )}
 
       {items.length > 0 && (
         <div style={{ display: 'flex', gap: 6, overflowX: 'auto', marginBottom: 14, paddingBottom: 4 }}>
           {categories.map(cat => (
-            <button
-              key={cat}
-              onClick={() => setFilter(cat)}
-              style={{
-                flexShrink: 0, padding: '5px 11px', borderRadius: 14, fontSize: 11, fontFamily: FONT_BODY, fontWeight: 600,
-                border: `1px solid ${filter === cat ? C.amber : C.line}`,
-                background: filter === cat ? `${C.amber}22` : 'transparent',
-                color: filter === cat ? C.amber : C.paperDim, cursor: 'pointer',
-              }}
-            >{cat}</button>
+            <button key={cat} onClick={() => setFilter(cat)} style={{ flexShrink: 0, padding: '5px 11px', borderRadius: 14, fontSize: 11, fontFamily: FONT_BODY, fontWeight: 600, border: `1px solid ${filter === cat ? C.amber : C.line}`, background: filter === cat ? `${C.amber}22` : 'transparent', color: filter === cat ? C.amber : C.paperDim, cursor: 'pointer' }}>{cat}</button>
           ))}
-        </div>
-      )}
-
-      {items.length === 0 && (
-        <div style={{ textAlign: 'center', padding: '40px 16px', color: C.paperDim }}>
-          <Package size={28} style={{ marginBottom: 10, opacity: 0.5 }} />
-          <div style={{ fontSize: 13 }}>No inventory yet — add your first item to get started.</div>
         </div>
       )}
 
@@ -889,8 +924,16 @@ function InventoryView({ inventory, role, onSave, onDelete }) {
                 {role === 'owner' && (
                   <div style={{ fontFamily: FONT_MONO, fontSize: 10, color: C.paperDim, marginTop: 2 }}>cost {naira(item.cost)}</div>
                 )}
+                {role === 'owner' && item.warehouseStock != null && (
+                  <div style={{ marginTop: 6, textAlign: 'right' }}>
+                    <div style={{ fontSize: 10, color: C.paperDim, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Shop</div>
+                    <div style={{ fontFamily: FONT_MONO, fontSize: 13, fontWeight: 700, color: low ? C.red : C.teal }}>{item.stock}</div>
+                    <div style={{ fontSize: 10, color: C.paperDim, textTransform: 'uppercase', letterSpacing: '0.05em', marginTop: 4 }}>Warehouse</div>
+                    <div style={{ fontFamily: FONT_MONO, fontSize: 13, fontWeight: 700, color: C.brass }}>{item.warehouseStock}</div>
+                  </div>
+                )}
                 <div style={{ fontSize: 10, color: low ? C.red : C.paperDim, marginTop: 4, fontWeight: 600 }}>
-                  {low ? 'REORDER NOW' : `reorder @ ${item.reorder}`}
+                  {low ? 'RESTOCK FLOOR' : `reorder @ ${item.reorder}`}
                 </div>
               </div>
               {role === 'owner' && <ChevronRight size={16} color={C.paperDim} style={{ flexShrink: 0 }} />}
@@ -916,9 +959,10 @@ function ItemForm({ item, existingIds, onSave, onDelete, onCancel }) {
   const isNew = !item;
   const [form, setForm] = useState(item || {
     id: '', name: '', brand: '', category: 'Engine Oil', size: '', origin: '',
-    cost: 0, price: 0, stock: 0, reorder: 0,
+    cost: 0, price: 0, stock: 0, warehouseStock: 0, reorder: 0,
   });
   const [error, setError] = useState('');
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const set = (key, val) => setForm(f => ({ ...f, [key]: val }));
 
@@ -933,6 +977,7 @@ function ItemForm({ item, existingIds, onSave, onDelete, onCancel }) {
       cost: Number(form.cost) || 0,
       price: Number(form.price) || 0,
       stock: Number(form.stock) || 0,
+      warehouseStock: Number(form.warehouseStock) || 0,
       reorder: Number(form.reorder) || 0,
     });
   };
@@ -991,8 +1036,12 @@ function ItemForm({ item, existingIds, onSave, onDelete, onCancel }) {
             <input style={inputStyle} type="number" value={form.price} onChange={e => set('price', e.target.value)} />
           </label>
           <label>
-            <span style={labelStyle}>Current stock</span>
+            <span style={labelStyle}>Shop floor stock</span>
             <input style={inputStyle} type="number" value={form.stock} onChange={e => set('stock', e.target.value)} />
+          </label>
+          <label>
+            <span style={labelStyle}>Warehouse stock</span>
+            <input style={inputStyle} type="number" value={form.warehouseStock ?? 0} onChange={e => set('warehouseStock', e.target.value)} />
           </label>
           <label>
             <span style={labelStyle}>Reorder level</span>
@@ -1006,10 +1055,20 @@ function ItemForm({ item, existingIds, onSave, onDelete, onCancel }) {
 
         {error && <div style={{ color: C.red, fontSize: 12, marginTop: 8 }}>{error}</div>}
 
+        {confirmDelete && (
+          <div style={{ background: `${C.red}18`, border: `1px solid ${C.red}55`, borderRadius: 8, padding: 12, marginTop: 12 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8 }}>Delete "{form.name}"? This cannot be undone.</div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={() => setConfirmDelete(false)} style={{ flex: 1, padding: '8px 0', borderRadius: 8, border: `1px solid ${C.line}`, background: 'transparent', color: C.paperDim, fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>Cancel</button>
+              <button onClick={onDelete} style={{ flex: 1, padding: '8px 0', borderRadius: 8, border: 'none', background: C.red, color: '#fff', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>Yes, delete</button>
+            </div>
+          </div>
+        )}
+
         <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-          {onDelete && (
+          {onDelete && !confirmDelete && (
             <button
-              onClick={onDelete}
+              onClick={() => setConfirmDelete(true)}
               style={{ padding: '11px 16px', borderRadius: 8, border: `1px solid ${C.red}66`, background: 'transparent', color: C.red, fontWeight: 700, fontSize: 13, cursor: 'pointer' }}
             >Delete</button>
           )}
@@ -1027,7 +1086,7 @@ function ItemForm({ item, existingIds, onSave, onDelete, onCancel }) {
   );
 }
 
-function SaleView({ inventory, onSubmit }) {
+function SaleView({ inventory, onSubmit, sales }) {
   const [search, setSearch] = useState('');
   const [itemId, setItemId] = useState(null);
   const [qty, setQty] = useState(1);
@@ -1199,6 +1258,43 @@ function SaleView({ inventory, onSubmit }) {
           </button>
         </>
       )}
+
+      {/* Today's sales log — visible to both owner and staff */}
+      {sales && (() => {
+        const todayTx = sales.filter(s => {
+          const d = new Date(s.timestamp); const now = new Date();
+          return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+        }).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+        if (todayTx.length === 0) return null;
+        return (
+          <div style={{ marginTop: 24 }}>
+            <div style={{ fontFamily: FONT_DISPLAY, fontSize: 13, textTransform: 'uppercase', letterSpacing: '0.03em', color: C.paperDim, marginBottom: 10 }}>
+              Sold today ({todayTx.length})
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {todayTx.map(sale => {
+                const time = new Date(sale.timestamp).toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit', hour12: true });
+                const payColor = sale.payment === 'Cash' ? C.teal : sale.payment === 'Transfer' ? C.blue : C.amber;
+                return (
+                  <div key={sale.id} style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, padding: '10px 12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 12.5, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{sale.itemName}</div>
+                      <div style={{ fontSize: 11, color: C.paperDim, marginTop: 2, display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span>Qty: {sale.qty}</span>
+                        <span style={{ color: payColor, fontWeight: 600 }}>{sale.payment}</span>
+                        <span>{time}</span>
+                      </div>
+                    </div>
+                    <div style={{ fontFamily: FONT_MONO, fontSize: 13, fontWeight: 700, color: C.amber, flexShrink: 0 }}>
+                      {naira(sale.qty * sale.unitPrice)}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -1314,7 +1410,7 @@ function ReportsView({ sales, inventory }) {
         </div>
         <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap' }}>
           <div>
-            <div style={{ fontFamily: FONT_MONO, fontSize: 22, fontWeight: 700, color: C.teal }}>{naira(todayInflow)}</div>
+            <div style={{ fontFamily: FONT_MONO, fontSize: 22, fontWeight: 700, color: todayInflow > 0 ? C.teal : C.paperDim }}>{naira(todayInflow)}</div>
             <div style={{ fontSize: 11, color: C.paperDim, marginTop: 2 }}>cash in today</div>
           </div>
           <div style={{ width: 1, background: C.line }} />
@@ -1359,7 +1455,44 @@ function ReportsView({ sales, inventory }) {
         {Object.keys(byPayment).length === 0 && <div style={{ color: C.paperDim, fontSize: 13 }}>No transactions in this period.</div>}
       </div>
 
-      <div style={{ fontSize: 11, color: C.paperDim, marginTop: 16 }}>{filtered.length} transactions in this period</div>
+      <div style={{ fontSize: 11, color: C.paperDim, marginTop: 16, marginBottom: 12 }}>{filtered.length} transactions in this period</div>
+
+      {filtered.length === 0 && (
+        <div style={{ textAlign: 'center', padding: '30px 16px', color: C.paperDim, background: C.panel, borderRadius: 10, border: `1px solid ${C.line}` }}>
+          <ShoppingCart size={24} style={{ marginBottom: 10, opacity: 0.4 }} />
+          <div style={{ fontSize: 13, fontWeight: 600, color: C.paper, marginBottom: 4 }}>No sales recorded yet</div>
+          <div style={{ fontSize: 12 }}>Head to <b style={{ color: C.amber }}>Record Sale</b> to log your first transaction — it'll show up here instantly.</div>
+        </div>
+      )}
+
+      {filtered.length > 0 && (
+        <>
+          <div style={{ fontFamily: FONT_DISPLAY, fontSize: 14, textTransform: 'uppercase', letterSpacing: '0.03em', color: C.paperDim, marginBottom: 10 }}>
+            Sales log
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {[...filtered].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)).map(sale => {
+              const time = new Date(sale.timestamp).toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit', hour12: true });
+              const payColor = sale.payment === 'Cash' ? C.teal : sale.payment === 'Transfer' ? C.blue : C.amber;
+              return (
+                <div key={sale.id} style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, padding: '10px 12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{sale.itemName}</div>
+                    <div style={{ fontSize: 11, color: C.paperDim, marginTop: 2, display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span>Qty: {sale.qty}</span>
+                      <span style={{ color: payColor, fontWeight: 600 }}>{sale.payment}</span>
+                      <span>{time}</span>
+                    </div>
+                  </div>
+                  <div style={{ fontFamily: FONT_MONO, fontSize: 13, fontWeight: 700, color: C.amber, flexShrink: 0 }}>
+                    {naira(sale.qty * sale.unitPrice)}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -1573,6 +1706,11 @@ function StaffView({ apiUrl, token }) {
   const [form, setForm] = useState({ name: '', phone: '', pin: '' });
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState('');
+  const [resetTarget, setResetTarget] = useState(null); // { id, name }
+  const [newPin, setNewPin] = useState('');
+  const [resetting, setResetting] = useState(false);
+  const [resetError, setResetError] = useState('');
+  const [resetSuccess, setResetSuccess] = useState(false);
 
   const loadStaff = useCallback(async () => {
     try {
@@ -1589,8 +1727,7 @@ function StaffView({ apiUrl, token }) {
     if (!form.name.trim()) return setFormError('Name is required');
     if (!form.phone.trim()) return setFormError('Phone number is required');
     if (!form.pin || form.pin.length < 4) return setFormError('PIN must be at least 4 digits');
-    setSaving(true);
-    setFormError('');
+    setSaving(true); setFormError('');
     try {
       await apiRequest(apiUrl, '/auth/staff', { method: 'POST', token, body: { name: form.name.trim(), phone: form.phone.trim(), pin: form.pin } });
       setForm({ name: '', phone: '', pin: '' });
@@ -1603,10 +1740,21 @@ function StaffView({ apiUrl, token }) {
     }
   };
 
-  const inputStyle = {
-    width: '100%', padding: '9px 10px', borderRadius: 7, border: `1px solid ${C.line}`,
-    background: C.ink, color: C.paper, fontFamily: FONT_BODY, fontSize: 13, marginTop: 4,
+  const handleResetPin = async () => {
+    if (!newPin || newPin.length < 4) return setResetError('New PIN must be at least 4 digits');
+    setResetting(true); setResetError('');
+    try {
+      await apiRequest(apiUrl, '/auth/reset-pin', { method: 'POST', token, body: { userId: resetTarget.id, newPin } });
+      setResetSuccess(true);
+      setTimeout(() => { setResetTarget(null); setNewPin(''); setResetSuccess(false); }, 1500);
+    } catch (e) {
+      setResetError(e.message || 'Could not reset PIN');
+    } finally {
+      setResetting(false);
+    }
   };
+
+  const inputStyle = { width: '100%', padding: '9px 10px', borderRadius: 7, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_BODY, fontSize: 13, marginTop: 4 };
   const labelStyle = { fontSize: 11, color: C.paperDim, fontWeight: 600 };
 
   return (
@@ -1616,14 +1764,7 @@ function StaffView({ apiUrl, token }) {
       </div>
 
       {!showForm && (
-        <button
-          onClick={() => setShowForm(true)}
-          style={{
-            width: '100%', padding: '11px 0', borderRadius: 8, border: `1px dashed ${C.amber}66`, background: `${C.amber}14`,
-            color: C.amber, fontFamily: FONT_BODY, fontWeight: 700, fontSize: 13, cursor: 'pointer',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, marginBottom: 16,
-          }}
-        >
+        <button onClick={() => setShowForm(true)} style={{ width: '100%', padding: '11px 0', borderRadius: 8, border: `1px dashed ${C.amber}66`, background: `${C.amber}14`, color: C.amber, fontFamily: FONT_BODY, fontWeight: 700, fontSize: 13, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, marginBottom: 16 }}>
           <Plus size={15} /> Add staff member
         </button>
       )}
@@ -1638,14 +1779,24 @@ function StaffView({ apiUrl, token }) {
           <input style={inputStyle} type="password" value={form.pin} onChange={e => setForm(f => ({ ...f, pin: e.target.value }))} placeholder="At least 4 digits" />
           {formError && <div style={{ color: C.red, fontSize: 12, marginTop: 8 }}>{formError}</div>}
           <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
-            <button
-              onClick={() => { setShowForm(false); setFormError(''); }}
-              style={{ flex: 1, padding: '10px 0', borderRadius: 8, border: `1px solid ${C.line}`, background: 'transparent', color: C.paperDim, fontWeight: 700, fontSize: 13, cursor: 'pointer' }}
-            >Cancel</button>
-            <button
-              onClick={handleAdd} disabled={saving}
-              style={{ flex: 1, padding: '10px 0', borderRadius: 8, border: 'none', background: C.amber, color: C.ink, fontWeight: 700, fontSize: 13, cursor: 'pointer' }}
-            >{saving ? 'Adding…' : 'Add staff'}</button>
+            <button onClick={() => { setShowForm(false); setFormError(''); }} style={{ flex: 1, padding: '10px 0', borderRadius: 8, border: `1px solid ${C.line}`, background: 'transparent', color: C.paperDim, fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>Cancel</button>
+            <button onClick={handleAdd} disabled={saving} style={{ flex: 1, padding: '10px 0', borderRadius: 8, border: 'none', background: C.amber, color: C.ink, fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>{saving ? 'Adding…' : 'Add staff'}</button>
+          </div>
+        </div>
+      )}
+
+      {/* PIN reset panel */}
+      {resetTarget && (
+        <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 10, padding: 14, marginBottom: 16 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>Reset PIN for {resetTarget.name}</div>
+          <label style={labelStyle}>New PIN</label>
+          <input style={inputStyle} type="password" value={newPin} onChange={e => setNewPin(e.target.value)} placeholder="At least 4 digits" />
+          {resetError && <div style={{ color: C.red, fontSize: 12, marginTop: 8 }}>{resetError}</div>}
+          <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+            <button onClick={() => { setResetTarget(null); setNewPin(''); setResetError(''); }} style={{ flex: 1, padding: '10px 0', borderRadius: 8, border: `1px solid ${C.line}`, background: 'transparent', color: C.paperDim, fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>Cancel</button>
+            <button onClick={handleResetPin} disabled={resetting} style={{ flex: 1, padding: '10px 0', borderRadius: 8, border: 'none', background: resetSuccess ? C.teal : C.amber, color: C.ink, fontWeight: 700, fontSize: 13, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+              {resetSuccess ? <><Check size={14} /> Done</> : resetting ? 'Saving…' : 'Set new PIN'}
+            </button>
           </div>
         </div>
       )}
@@ -1666,7 +1817,13 @@ function StaffView({ apiUrl, token }) {
               <div style={{ fontSize: 13, fontWeight: 600 }}>{s.name}</div>
               <div style={{ fontSize: 11, color: C.paperDim, marginTop: 2, fontFamily: FONT_MONO }}>{s.phone}</div>
             </div>
-            <Tag color={C.blue}>Staff</Tag>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <button
+                onClick={() => { setResetTarget({ id: s.id, name: s.name }); setNewPin(''); setResetError(''); setShowForm(false); }}
+                style={{ fontSize: 11, fontWeight: 600, color: C.paperDim, background: 'none', border: `1px solid ${C.line}`, borderRadius: 6, padding: '4px 8px', cursor: 'pointer' }}
+              >Reset PIN</button>
+              <Tag color={C.blue}>Staff</Tag>
+            </div>
           </div>
         ))}
       </div>
