@@ -3,7 +3,7 @@ import {
   Fuel, Droplet, Package, TrendingUp, TrendingDown, AlertTriangle,
   RefreshCw, MessageCircle, Lock, Clock, ChevronRight, Plus, Minus,
   ShoppingCart, BarChart3, Wallet, Boxes, Wrench, Link2, Check, Sparkles, ArrowUp, ArrowDown, Timer, ArchiveX, Award,
-  Wifi, WifiOff, LogOut, Server, CloudUpload, AlertCircle, Users
+  Wifi, WifiOff, LogOut, Server, CloudUpload, AlertCircle, Users, ClipboardList
 } from 'lucide-react';
 
 /* ---------------------------------------------------------------
@@ -469,6 +469,9 @@ export default function TodayBread() {
         {tab === 'staff' && role === 'owner' && (
           <StaffView apiUrl={apiUrl} token={token} />
         )}
+        {tab === 'notebook' && role === 'owner' && (
+          <NotebookView inventory={inventory} onRecordSales={recordSale} onAddStock={saveItem} />
+        )}
       </div>
     </div>
   );
@@ -791,6 +794,7 @@ function TabBar({ role, tab, setTab, lowStockCount }) {
     { id: 'inventory', label: 'Inventory', icon: Package },
     ...(role === 'owner' ? [{ id: 'whatsapp', label: 'WhatsApp', icon: MessageCircle }] : []),
     ...(role === 'owner' ? [{ id: 'staff', label: 'Staff', icon: Users }] : []),
+    ...(role === 'owner' ? [{ id: 'notebook', label: 'Notebook', icon: ClipboardList }] : []),
   ];
   return (
     <div style={{ display: 'flex', overflowX: 'auto', borderBottom: `1px solid ${C.line}`, maxWidth: 720, margin: '0 auto', padding: '0 16px' }}>
@@ -1846,6 +1850,185 @@ function StaffView({ apiUrl, token }) {
   );
 }
 
+
+// ============================================================================
+// NOTEBOOK VIEW — paste Google Lens output, parse to sales or stock arrivals
+// ============================================================================
+function normalize(str) {
+  return String(str || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function fuzzyMatch(description, inventory) {
+  const target = normalize(description).split(' ').filter(w => w.length > 1);
+  if (target.length === 0) return null;
+  let best = null, bestScore = 0;
+  for (const item of inventory) {
+    const words = normalize(item.name + ' ' + item.brand + ' ' + item.category).split(' ').filter(Boolean);
+    const overlap = target.filter(w => words.some(iw => iw.includes(w) || w.includes(iw))).length;
+    const score = overlap / Math.max(target.length, 1);
+    if (score > bestScore && score >= 0.25) { bestScore = score; best = { item, confidence: score }; }
+  }
+  return best;
+}
+
+function parseLine(line) {
+  const qtyPatterns = [/[x×]\s*(\d+)/i, /(\d+)\s*pcs/i, /(\d+)\s*units?/i, /qty\s*[:\-]?\s*(\d+)/i, /(\d+)\s*cartons?/i, /(\d+)\s*bottles?/i];
+  let qty = 1;
+  let desc = line;
+  for (const pattern of qtyPatterns) {
+    const m = line.match(pattern);
+    if (m) { qty = parseInt(m[1]); desc = line.replace(m[0], '').trim(); break; }
+  }
+  desc = desc.replace(/[-–]\s*\d{4,}/g, '').trim();
+  desc = desc.replace(/^\d+\s+/, '').replace(/\s+\d+$/, '').trim();
+  return { desc: desc || line, qty };
+}
+
+function NotebookView({ inventory, onRecordSales, onAddStock }) {
+  const [mode, setMode] = useState('sales');
+  const [raw, setRaw] = useState('');
+  const [parsed, setParsed] = useState(null);
+  const [payment, setPayment] = useState('Cash');
+  const [committing, setCommitting] = useState(false);
+  const [done, setDone] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleParse = () => {
+    const lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
+    const results = lines.map(line => {
+      const { desc, qty } = parseLine(line);
+      const match = fuzzyMatch(desc, inventory);
+      return { rawLine: line, desc, qty, match, confirmed: !!match, overrideQty: qty };
+    });
+    setParsed(results);
+    setDone(false);
+    setError('');
+  };
+
+  const updateQty = (idx, val) => setParsed(p => p.map((r, i) => i === idx ? { ...r, overrideQty: Math.max(1, Number(val) || 1) } : r));
+  const updateMatch = (idx, itemId) => {
+    const item = inventory.find(i => i.id === itemId);
+    setParsed(p => p.map((r, i) => i === idx ? { ...r, match: item ? { item, confidence: 1 } : null, confirmed: !!item } : r));
+  };
+  const toggleConfirm = (idx) => setParsed(p => p.map((r, i) => i === idx ? { ...r, confirmed: !r.confirmed } : r));
+
+  const handleCommit = async () => {
+    const toCommit = parsed.filter(r => r.confirmed && r.match);
+    if (toCommit.length === 0) return setError('No confirmed matches to record');
+    setCommitting(true); setError('');
+    try {
+      for (const row of toCommit) {
+        if (mode === 'sales') {
+          await onRecordSales(row.match.item.id, row.overrideQty, payment);
+        } else {
+          await onAddStock({ ...row.match.item, stock: row.match.item.stock + row.overrideQty });
+        }
+      }
+      setDone(true); setRaw(''); setParsed(null);
+    } catch (e) {
+      setError(e.message || 'Could not record entries');
+    } finally {
+      setCommitting(false);
+    }
+  };
+
+  const confirmedCount = parsed?.filter(r => r.confirmed && r.match).length || 0;
+
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+        <ClipboardList size={16} color={C.amber} />
+        <div>
+          <div style={{ fontFamily: FONT_DISPLAY, fontSize: 15, textTransform: 'uppercase', letterSpacing: '0.03em' }}>Paste from notebook</div>
+          <div style={{ fontSize: 11, color: C.paperDim, marginTop: 2 }}>Use Google Lens to scan your notebook page → copy text → paste below</div>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', background: C.panel, borderRadius: 8, border: `1px solid ${C.line}`, padding: 3, marginBottom: 14, width: 'fit-content' }}>
+        {[['sales', 'Recording Sales'], ['stock', 'Stock Arrival']].map(([m, label]) => (
+          <button key={m} onClick={() => setMode(m)} style={{ padding: '7px 16px', borderRadius: 6, border: 'none', cursor: 'pointer', background: mode === m ? C.amber : 'transparent', color: mode === m ? C.ink : C.paperDim, fontFamily: FONT_BODY, fontWeight: 600, fontSize: 12 }}>{label}</button>
+        ))}
+      </div>
+
+      {!parsed && (
+        <>
+          <textarea
+            value={raw}
+            onChange={e => setRaw(e.target.value)}
+            placeholder={mode === 'sales'
+              ? 'Paste your Google Lens text here. Examples:\n\nCastrol brake fluid x5\nMobil 20-50 engine oil 2pcs\nTotal gear oil x10\nair freshner 12'
+              : 'Paste your Google Lens text here. Examples:\n\nCastrol dot 3 x100\nMobil 5W-30 20 bottles\nShell Helix 10W-40 x50\nPrestone coolant 30'}
+            style={{ width: '100%', minHeight: 200, padding: '12px', borderRadius: 8, border: `1px solid ${C.line}`, background: C.panel, color: C.paper, fontFamily: FONT_MONO, fontSize: 13, lineHeight: 1.6, resize: 'vertical' }}
+          />
+          <button onClick={handleParse} disabled={!raw.trim()} style={{ width: '100%', marginTop: 12, padding: '12px 0', borderRadius: 8, border: 'none', background: raw.trim() ? C.amber : C.line, color: raw.trim() ? C.ink : C.paperDim, fontFamily: FONT_BODY, fontWeight: 700, fontSize: 14, cursor: raw.trim() ? 'pointer' : 'default' }}>
+            Parse entries
+          </button>
+        </>
+      )}
+
+      {parsed && !done && (
+        <>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+            <div style={{ fontSize: 12, color: C.paperDim }}>{parsed.length} line{parsed.length !== 1 ? 's' : ''} parsed — review before confirming</div>
+            <button onClick={() => setParsed(null)} style={{ fontSize: 11, color: C.paperDim, background: 'none', border: 'none', cursor: 'pointer' }}>← Edit text</button>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
+            {parsed.map((row, idx) => (
+              <div key={idx} style={{ background: C.panel, border: `1px solid ${row.match && row.confirmed ? C.teal + '55' : !row.match ? C.red + '55' : C.line}`, borderRadius: 10, padding: '12px 14px' }}>
+                <div style={{ fontSize: 10, color: C.paperDim, fontFamily: FONT_MONO, marginBottom: 6 }}>{row.rawLine}</div>
+                {row.match ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600 }}>{row.match.item.name}</div>
+                      <div style={{ fontSize: 11, color: C.paperDim, marginTop: 2 }}>{row.match.item.brand} · {Math.round(row.match.confidence * 100)}% match</div>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <input type="number" value={row.overrideQty} min={1} onChange={e => updateQty(idx, e.target.value)} style={{ width: 52, textAlign: 'center', padding: '5px 6px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_MONO, fontSize: 14, fontWeight: 700 }} />
+                      <button onClick={() => toggleConfirm(idx)} style={{ padding: '5px 10px', borderRadius: 6, border: 'none', background: row.confirmed ? C.teal : C.line, color: row.confirmed ? '#fff' : C.paperDim, fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>{row.confirmed ? '✓' : 'Skip'}</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <AlertTriangle size={13} color={C.red} />
+                    <span style={{ fontSize: 12, color: C.red }}>No match — pick manually:</span>
+                    <select onChange={e => updateMatch(idx, e.target.value)} style={{ flex: 1, minWidth: 160, padding: '5px 8px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontSize: 12 }}>
+                      <option value="">— pick an item —</option>
+                      {inventory.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
+                    </select>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+
+          {mode === 'sales' && (
+            <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+              {['Cash', 'Transfer', 'POS'].map(p => (
+                <button key={p} onClick={() => setPayment(p)} style={{ flex: 1, padding: '8px 0', borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: 'pointer', border: `1px solid ${payment === p ? C.teal : C.line}`, background: payment === p ? `${C.teal}22` : 'transparent', color: payment === p ? C.teal : C.paperDim }}>{p}</button>
+              ))}
+            </div>
+          )}
+
+          {error && <div style={{ color: C.red, fontSize: 12, marginBottom: 10 }}>{error}</div>}
+
+          <button onClick={handleCommit} disabled={committing || confirmedCount === 0} style={{ width: '100%', padding: '13px 0', borderRadius: 8, border: 'none', background: confirmedCount > 0 ? C.amber : C.line, color: confirmedCount > 0 ? C.ink : C.paperDim, fontFamily: FONT_BODY, fontWeight: 700, fontSize: 14, cursor: confirmedCount > 0 ? 'pointer' : 'default' }}>
+            {committing ? 'Recording…' : `Record ${confirmedCount} confirmed entr${confirmedCount === 1 ? 'y' : 'ies'}`}
+          </button>
+        </>
+      )}
+
+      {done && (
+        <div style={{ textAlign: 'center', padding: '40px 16px' }}>
+          <Check size={32} color={C.teal} style={{ marginBottom: 12 }} />
+          <div style={{ fontSize: 15, fontWeight: 600, color: C.paper, marginBottom: 6 }}>All done</div>
+          <div style={{ fontSize: 13, color: C.paperDim, marginBottom: 20 }}>Entries recorded successfully from your notebook.</div>
+          <button onClick={() => setDone(false)} style={{ padding: '10px 24px', borderRadius: 8, border: 'none', background: C.amber, color: C.ink, fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>Paste another page</button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ============================================================================
 // ADMIN DASHBOARD — only shown to super admin (JOHN KUNLE / 2348083161190)
