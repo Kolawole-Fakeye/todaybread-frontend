@@ -414,18 +414,29 @@ export default function TodayBread() {
       ? <SignupScreen apiUrl={apiUrl} onSignup={setAuth} onBackToLogin={() => setAuthMode('login')} />
       : <LoginScreen apiUrl={apiUrl} onLogin={setAuth} onChangeApiUrl={() => setApiUrl(null)} onShowSignup={() => setAuthMode('signup')} />;
   }
+
+  // Super admin sees a completely different dashboard
+  if (auth.user?.isSuperAdmin) {
+    return <AdminDashboard apiUrl={apiUrl} token={token} onLogout={handleLogout} />;
+  }
+
   if (!dataLoaded) {
     return <LoadingScreen />;
   }
 
   return (
-    <div style={{ background: C.ink, minHeight: '100vh', color: C.paper, fontFamily: FONT_BODY }}>
+    <div style={{ background: C.ink, backgroundImage: 'radial-gradient(circle, rgba(242,169,59,0.07) 1px, transparent 1px)', backgroundSize: '24px 24px', minHeight: '100vh', color: C.paper, fontFamily: FONT_BODY }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
         * { box-sizing: border-box; }
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
         .spin { animation: spin 1s linear infinite; }
         ::-webkit-scrollbar { height: 0; width: 0; }
+        body {
+          background-color: #14151A;
+          background-image: radial-gradient(circle, rgba(242,169,59,0.07) 1px, transparent 1px);
+          background-size: 24px 24px;
+        }
       `}</style>
 
       <TickerBar fmtTime={fmtTime} rates={rates} rateLoading={rateLoading} rateError={rateError} onRefresh={fetchRates} />
@@ -465,7 +476,7 @@ export default function TodayBread() {
 
 function LoadingScreen() {
   return (
-    <div style={{ background: C.ink, minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.paper, fontFamily: FONT_BODY }}>
+    <div style={{ background: C.ink, backgroundImage: 'radial-gradient(circle, rgba(242,169,59,0.05) 1px, transparent 1px)', backgroundSize: '28px 28px', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.paper, fontFamily: FONT_BODY }}>
       Loading TodayBread…
     </div>
   );
@@ -496,7 +507,7 @@ function ApiSetupScreen({ onSave }) {
   };
 
   return (
-    <div style={{ background: C.ink, minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, fontFamily: FONT_BODY }}>
+    <div style={{ background: C.ink, backgroundImage: 'radial-gradient(circle, rgba(242,169,59,0.05) 1px, transparent 1px)', backgroundSize: '28px 28px', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, fontFamily: FONT_BODY }}>
       <div style={{ maxWidth: 360, width: '100%' }}>
         <div style={{ fontFamily: FONT_DISPLAY, fontSize: 24, color: C.paper, textTransform: 'uppercase', marginBottom: 6 }}>
           Today<span style={{ color: C.amber }}>Bread</span>
@@ -532,7 +543,8 @@ function LoginScreen({ apiUrl, onLogin, onChangeApiUrl, onShowSignup }) {
     try {
       const data = await apiRequest(apiUrl, '/auth/login', { method: 'POST', body: { phone, pin } });
       const me = await apiRequest(apiUrl, '/me', { token: data.token }).catch(() => null);
-      await onLogin({ token: data.token, user: data.user, business: me?.business || { name: 'TodayBread Business' } });
+      const adminCheck = await apiRequest(apiUrl, '/admin/check', { token: data.token }).catch(() => ({ isSuperAdmin: false }));
+      await onLogin({ token: data.token, user: { ...data.user, isSuperAdmin: adminCheck.isSuperAdmin }, business: me?.business || { name: 'TodayBread' } });
     } catch (e) {
       setError(e.message || 'Login failed');
     } finally {
@@ -541,7 +553,7 @@ function LoginScreen({ apiUrl, onLogin, onChangeApiUrl, onShowSignup }) {
   };
 
   return (
-    <div style={{ background: C.ink, minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, fontFamily: FONT_BODY }}>
+    <div style={{ background: C.ink, backgroundImage: 'radial-gradient(circle, rgba(242,169,59,0.05) 1px, transparent 1px)', backgroundSize: '28px 28px', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, fontFamily: FONT_BODY }}>
       <div style={{ maxWidth: 360, width: '100%' }}>
         <div style={{ fontFamily: FONT_DISPLAY, fontSize: 24, color: C.paper, textTransform: 'uppercase', marginBottom: 6 }}>
           Today<span style={{ color: C.amber }}>Bread</span>
@@ -622,7 +634,7 @@ function SignupScreen({ apiUrl, onSignup, onBackToLogin }) {
   const labelStyle = { fontSize: 11, color: C.paperDim, fontWeight: 600 };
 
   return (
-    <div style={{ background: C.ink, minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, fontFamily: FONT_BODY }}>
+    <div style={{ background: C.ink, backgroundImage: 'radial-gradient(circle, rgba(242,169,59,0.05) 1px, transparent 1px)', backgroundSize: '28px 28px', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, fontFamily: FONT_BODY }}>
       <div style={{ maxWidth: 360, width: '100%' }}>
         <div style={{ fontFamily: FONT_DISPLAY, fontSize: 24, color: C.paper, textTransform: 'uppercase', marginBottom: 6 }}>
           Today<span style={{ color: C.amber }}>Bread</span>
@@ -703,7 +715,10 @@ function TickerBar({ fmtTime, rates, rateLoading, rateError, onRefresh }) {
 
   return (
     <div style={{
-      background: '#0E0F12', borderBottom: `1px solid ${C.line}`,
+      background: '#0E0F12',
+      backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='40'%3E%3Cpath d='M0 20 Q25 8 50 20 Q75 32 100 20 Q125 8 150 20 Q175 32 200 20' fill='none' stroke='rgba(242,169,59,0.06)' stroke-width='1'/%3E%3Cpath d='M0 28 Q25 16 50 28 Q75 40 100 28 Q125 16 150 28 Q175 40 200 28' fill='none' stroke='rgba(242,169,59,0.04)' stroke-width='1'/%3E%3Cpath d='M0 12 Q25 0 50 12 Q75 24 100 12 Q125 0 150 12 Q175 24 200 12' fill='none' stroke='rgba(242,169,59,0.03)' stroke-width='1'/%3E%3C/svg%3E")`,
+      backgroundSize: '200px 40px',
+      borderBottom: `1px solid ${C.line}`,
       display: 'flex', alignItems: 'center', overflowX: 'auto',
       padding: '8px 12px', gap: 18,
     }}>
@@ -1831,3 +1846,178 @@ function StaffView({ apiUrl, token }) {
   );
 }
 
+
+// ============================================================================
+// ADMIN DASHBOARD — only shown to super admin (JOHN KUNLE / 2348083161190)
+// ============================================================================
+function AdminDashboard({ apiUrl, token, onLogout }) {
+  const [stats, setStats] = useState(null);
+  const [businesses, setBusinesses] = useState(null);
+  const [selected, setSelected] = useState(null);
+  const [detail, setDetail] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const [s, b] = await Promise.all([
+          apiRequest(apiUrl, '/admin/stats', { token }),
+          apiRequest(apiUrl, '/admin/businesses', { token }),
+        ]);
+        setStats(s);
+        setBusinesses(b.businesses);
+      } catch (e) {
+        setError(e.message);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [apiUrl, token]);
+
+  const loadDetail = async (id) => {
+    setSelected(id);
+    setDetail(null);
+    try {
+      const data = await apiRequest(apiUrl, `/admin/businesses/${id}`, { token });
+      setDetail(data);
+    } catch (e) {
+      setDetail({ error: e.message });
+    }
+  };
+
+  const daysSince = (dateStr) => {
+    const diff = Date.now() - new Date(dateStr).getTime();
+    const days = Math.floor(diff / 86400000);
+    if (days === 0) return 'Today';
+    if (days === 1) return 'Yesterday';
+    return `${days}d ago`;
+  };
+
+  return (
+    <div style={{ background: C.ink, backgroundImage: 'radial-gradient(circle, rgba(242,169,59,0.07) 1px, transparent 1px)', backgroundSize: '24px 24px', minHeight: '100vh', color: C.paper, fontFamily: FONT_BODY }}>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap'); * { box-sizing: border-box; } ::-webkit-scrollbar { height: 0; width: 0; } body { background-color: #14151A; }`}</style>
+
+      {/* Header */}
+      <div style={{ background: '#0E0F12', backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='40'%3E%3Cpath d='M0 20 Q25 8 50 20 Q75 32 100 20 Q125 8 150 20 Q175 32 200 20' fill='none' stroke='rgba(242,169,59,0.06)' stroke-width='1'/%3E%3C/svg%3E")`, backgroundSize: '200px 40px', borderBottom: `1px solid ${C.line}`, padding: '14px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div>
+          <div style={{ fontFamily: FONT_MONO, fontSize: 10, color: C.paperDim, letterSpacing: '0.12em', textTransform: 'uppercase', marginBottom: 4 }}>
+            Today<span style={{ color: C.amber }}>Bread</span> platform
+          </div>
+          <div style={{ fontFamily: FONT_DISPLAY, fontSize: 20, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.02em' }}>
+            Admin Dashboard
+          </div>
+          <div style={{ fontSize: 11, color: C.teal, marginTop: 2 }}>Super admin view · all data visible</div>
+        </div>
+        <button onClick={onLogout} style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '7px 11px', borderRadius: 8, border: `1px solid ${C.line}`, background: C.panel, color: C.paperDim, cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>
+          Log out
+        </button>
+      </div>
+
+      <div style={{ padding: 16, maxWidth: 720, margin: '0 auto' }}>
+        {loading && <div style={{ color: C.paperDim, fontSize: 13, padding: '30px 0' }}>Loading platform data…</div>}
+        {error && <div style={{ color: C.red, fontSize: 13 }}>{error}</div>}
+
+        {/* Platform stats */}
+        {stats && (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 20 }}>
+            {[
+              ['Businesses', stats.totalBusinesses, C.amber],
+              ['Total users', stats.totalUsers, C.paper],
+              ['Total sales', stats.totalSales, C.teal],
+              ['Platform revenue', naira(stats.totalRevenue), C.teal],
+              ['Inventory items', stats.totalItems, C.paperDim],
+            ].map(([label, value, color]) => (
+              <div key={label} style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 10, padding: '12px 14px' }}>
+                <div style={{ fontSize: 10, color: C.paperDim, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label}</div>
+                <div style={{ fontFamily: FONT_MONO, fontSize: 20, fontWeight: 700, color, marginTop: 4 }}>{value}</div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Business list */}
+        {businesses && (
+          <>
+            <div style={{ fontFamily: FONT_DISPLAY, fontSize: 14, textTransform: 'uppercase', letterSpacing: '0.03em', color: C.paperDim, marginBottom: 10 }}>
+              All businesses ({businesses.length})
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {businesses.map(b => (
+                <div key={b.id}>
+                  <div
+                    onClick={() => selected === b.id ? setSelected(null) : loadDetail(b.id)}
+                    style={{ background: selected === b.id ? C.panel2 : C.panel, border: `1px solid ${selected === b.id ? C.amber + '55' : C.line}`, borderRadius: 10, padding: '12px 14px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}
+                  >
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700 }}>{b.name}</div>
+                      {b.address && <div style={{ fontSize: 11, color: C.paperDim, marginTop: 2 }}>{b.address}</div>}
+                      <div style={{ fontSize: 11, color: C.paperDim, marginTop: 4, display: 'flex', gap: 12 }}>
+                        <span>👤 {b.owner_name || '—'}</span>
+                        <span>📦 {b.item_count} items</span>
+                        <span>🧾 {b.sale_count} sales</span>
+                      </div>
+                    </div>
+                    <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                      <div style={{ fontFamily: FONT_MONO, fontSize: 12, fontWeight: 700, color: C.amber }}>{naira(b.total_revenue)}</div>
+                      <div style={{ fontSize: 10, color: C.paperDim, marginTop: 3 }}>{daysSince(b.created_at)}</div>
+                      {b.last_sale_at && <div style={{ fontSize: 10, color: C.teal, marginTop: 2 }}>last sale {daysSince(b.last_sale_at)}</div>}
+                      {!b.last_sale_at && <div style={{ fontSize: 10, color: C.red, marginTop: 2 }}>no sales yet</div>}
+                    </div>
+                  </div>
+
+                  {/* Expanded detail */}
+                  {selected === b.id && (
+                    <div style={{ background: C.panel2, border: `1px solid ${C.amber}33`, borderTop: 'none', borderRadius: '0 0 10px 10px', padding: '12px 14px' }}>
+                      {!detail && <div style={{ fontSize: 12, color: C.paperDim }}>Loading detail…</div>}
+                      {detail?.error && <div style={{ fontSize: 12, color: C.red }}>{detail.error}</div>}
+                      {detail && !detail.error && (
+                        <>
+                          <div style={{ display: 'flex', gap: 16, marginBottom: 12, flexWrap: 'wrap' }}>
+                            <div style={{ fontSize: 11 }}><span style={{ color: C.paperDim }}>Phone: </span><span style={{ fontFamily: FONT_MONO }}>{detail.business.owner_phone}</span></div>
+                            <div style={{ fontSize: 11 }}><span style={{ color: C.paperDim }}>Staff: </span>{detail.staff.length} account{detail.staff.length !== 1 ? 's' : ''}</div>
+                            <div style={{ fontSize: 11 }}><span style={{ color: C.paperDim }}>WhatsApp: </span><span style={{ fontFamily: FONT_MONO }}>{detail.business.whatsapp_number || '—'}</span></div>
+                          </div>
+
+                          {detail.topItems.length > 0 && (
+                            <>
+                              <div style={{ fontSize: 10, color: C.paperDim, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>Top items</div>
+                              {detail.topItems.map((item, i) => (
+                                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '4px 0', borderBottom: `1px solid ${C.line}` }}>
+                                  <span>{item.name}</span>
+                                  <span style={{ color: C.paperDim }}>{item.times_sold} sold · {item.stock} left</span>
+                                </div>
+                              ))}
+                              <div style={{ height: 12 }} />
+                            </>
+                          )}
+
+                          {detail.recentSales.length > 0 && (
+                            <>
+                              <div style={{ fontSize: 10, color: C.paperDim, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>Recent sales</div>
+                              {detail.recentSales.map((s, i) => (
+                                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '4px 0', borderBottom: `1px solid ${C.line}` }}>
+                                  <span style={{ color: C.paperDim }}>{new Date(s.occurred_at).toLocaleDateString('en-NG', { day: 'numeric', month: 'short' })}</span>
+                                  <span style={{ flex: 1, padding: '0 10px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.item_name}</span>
+                                  <span style={{ fontFamily: FONT_MONO, color: C.amber }}>{naira(s.qty * s.unit_price)}</span>
+                                </div>
+                              ))}
+                            </>
+                          )}
+
+                          {detail.recentSales.length === 0 && detail.topItems.length === 0 && (
+                            <div style={{ fontSize: 12, color: C.paperDim, fontStyle: 'italic' }}>No activity recorded yet.</div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
