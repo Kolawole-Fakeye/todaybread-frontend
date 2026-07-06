@@ -280,7 +280,7 @@ export default function TodayBread() {
         id: i.sku, dbId: i.id, name: i.name, brand: i.brand, size: i.size, category: i.category,
         cost: Number(i.cost_price || 0), price: Number(i.sale_price), stock: i.stock,
         warehouseStock: i.warehouse_stock != null ? Number(i.warehouse_stock) : null,
-        reorder: i.reorder_level, origin: i.origin,
+        reorder: i.reorder_level, origin: i.origin, isPublic: !!i.is_public,
       }));
       const mappedSales = salesRes.sales.map(s => ({
         id: s.id, itemId: s.item_id, itemName: s.item_name, qty: s.qty,
@@ -400,6 +400,17 @@ export default function TodayBread() {
     setInventoryLocal([]);
   };
 
+  const togglePublic = async (item) => {
+    try {
+      const res = await apiRequest(apiUrl, `/inventory/${item.dbId}/visibility`, {
+        method: 'PATCH', token, body: { isPublic: !item.isPublic },
+      });
+      setInventoryLocal(inv => inv.map(i => i.id === item.id ? { ...i, isPublic: res.isPublic } : i));
+    } catch (e) {
+      alert(`Could not update visibility: ${e.message}`);
+    }
+  };
+
   const handleLogout = () => setAuth(null);
   const [authMode, setAuthMode] = useState('login');
 
@@ -449,7 +460,7 @@ export default function TodayBread() {
 
       <div style={{ padding: '16px', maxWidth: 720, margin: '0 auto' }}>
         {tab === 'inventory' && (
-          <InventoryView inventory={inventory} role={role} onSave={saveItem} onDelete={deleteItem} onClearAll={clearAllItems} />
+          <InventoryView inventory={inventory} role={role} onSave={saveItem} onDelete={deleteItem} onClearAll={clearAllItems} onTogglePublic={togglePublic} />
         )}
         {tab === 'sale' && (
           <SaleView inventory={inventory} onSubmit={recordSale} sales={sales} />
@@ -464,7 +475,7 @@ export default function TodayBread() {
           <ReportsView sales={sales} inventory={inventory} />
         )}
         {tab === 'whatsapp' && role === 'owner' && (
-          <WhatsAppView sales={sales} inventory={inventory} lowStockItems={lowStockItems} />
+          <WhatsAppView sales={sales} inventory={inventory} lowStockItems={lowStockItems} business={auth.business} apiUrl={apiUrl} />
         )}
         {tab === 'staff' && role === 'owner' && (
           <StaffView apiUrl={apiUrl} token={token} />
@@ -598,7 +609,7 @@ function LoginScreen({ apiUrl, onLogin, onChangeApiUrl, onShowSignup }) {
 }
 
 function SignupScreen({ apiUrl, onSignup, onBackToLogin }) {
-  const [form, setForm] = useState({ businessName: '', ownerName: '', phone: '', pin: '', whatsappNumber: '' });
+  const [form, setForm] = useState({ businessName: '', ownerName: '', address: '', phone: '', pin: '', whatsappNumber: '' });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -617,6 +628,7 @@ function SignupScreen({ apiUrl, onSignup, onBackToLogin }) {
         body: {
           businessName: form.businessName.trim(),
           ownerName: form.ownerName.trim(),
+          address: form.address.trim() || null,
           phone: form.phone.trim(),
           pin: form.pin,
           whatsappNumber: form.whatsappNumber.trim() || form.phone.trim(),
@@ -646,6 +658,9 @@ function SignupScreen({ apiUrl, onSignup, onBackToLogin }) {
 
         <label style={labelStyle}>Business name</label>
         <input style={inputStyle} value={form.businessName} onChange={e => set('businessName', e.target.value)} placeholder="e.g. Apex Autos Limited" />
+
+        <label style={labelStyle}>Shop address</label>
+        <input style={inputStyle} value={form.address} onChange={e => set('address', e.target.value)} placeholder="e.g. Block C, Shop 14, Trade Fair Complex, Lagos" />
 
         <label style={labelStyle}>Your name</label>
         <input style={inputStyle} value={form.ownerName} onChange={e => set('ownerName', e.target.value)} placeholder="e.g. Kola Fakeye" />
@@ -836,7 +851,7 @@ function Tag({ children, color }) {
   );
 }
 
-function InventoryView({ inventory, role, onSave, onDelete, onClearAll }) {
+function InventoryView({ inventory, role, onSave, onDelete, onClearAll, onTogglePublic }) {
   const [filter, setFilter] = useState('All');
   const [editingItem, setEditingItem] = useState(undefined);
   const [confirmClearAll, setConfirmClearAll] = useState(false);
@@ -954,6 +969,16 @@ function InventoryView({ inventory, role, onSave, onDelete, onClearAll }) {
                 <div style={{ fontSize: 10, color: low ? C.red : C.paperDim, marginTop: 4, fontWeight: 600 }}>
                   {low ? 'RESTOCK FLOOR' : `reorder @ ${item.reorder}`}
                 </div>
+                {role === 'owner' && (
+                  <button
+                    onClick={e => { e.stopPropagation(); onTogglePublic(item); }}
+                    style={{
+                      marginTop: 6, padding: '3px 8px', borderRadius: 5, border: 'none', cursor: 'pointer', fontSize: 10, fontWeight: 700,
+                      background: item.isPublic ? `${C.teal}33` : `${C.line}`,
+                      color: item.isPublic ? C.teal : C.paperDim,
+                    }}
+                  >{item.isPublic ? '🌐 Public' : 'Private'}</button>
+                )}
               </div>
               {role === 'owner' && <ChevronRight size={16} color={C.paperDim} style={{ flexShrink: 0 }} />}
             </div>
@@ -1680,7 +1705,7 @@ function StatCard({ label, value, color }) {
   );
 }
 
-function WhatsAppView({ sales, inventory, lowStockItems }) {
+function WhatsAppView({ sales, inventory, lowStockItems, business, apiUrl }) {
   const today = filterSalesByRange(sales, 'today');
   const revenue = today.reduce((sum, s) => sum + s.qty * s.unitPrice, 0);
   const agg = {};
@@ -1688,9 +1713,34 @@ function WhatsAppView({ sales, inventory, lowStockItems }) {
   const topId = Object.keys(agg).sort((a, b) => agg[b] - agg[a])[0];
   const topItem = inventory.find(i => i.id === topId);
   const dateStr = new Date().toLocaleDateString('en-NG', { weekday: 'long', day: 'numeric', month: 'long' });
+  const publicCount = inventory.filter(i => i.isPublic).length;
+
+  // Derive catalogue URL from the backend URL — same origin for now
+  const catalogueUrl = business?.slug
+    ? `${apiUrl?.replace('/api', '') || ''}/catalogue/${business.slug}`
+    : null;
 
   return (
     <div>
+
+      {/* Catalogue link section */}
+      <div style={{ background: C.panel, border: `1px solid ${C.amber}44`, borderRadius: 10, padding: 14, marginBottom: 16 }}>
+        <div style={{ fontSize: 10, color: C.amber, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8, fontWeight: 700 }}>🌐 Your public catalogue</div>
+        {publicCount === 0 ? (
+          <div style={{ fontSize: 12, color: C.paperDim }}>
+            No items are marked public yet. Go to <b style={{ color: C.paper }}>Inventory</b> and tap <b style={{ color: C.teal }}>Private</b> on each item you want customers to see — it switches to <b style={{ color: C.teal }}>🌐 Public</b>.
+          </div>
+        ) : (
+          <>
+            <div style={{ fontSize: 12, color: C.paperDim, marginBottom: 10 }}>{publicCount} item{publicCount !== 1 ? 's' : ''} visible to customers</div>
+            <div style={{ background: C.panel2, borderRadius: 7, padding: '10px 12px', fontFamily: FONT_MONO, fontSize: 12, color: C.teal, wordBreak: 'break-all', marginBottom: 10 }}>
+              {catalogueUrl || `${apiUrl}/catalogue/${business?.slug || 'your-shop'}`}
+            </div>
+            <div style={{ fontSize: 11, color: C.paperDim }}>Share this link on WhatsApp, your signboard, or anywhere — customers see your products without needing to log in. Powered by TodayBread.</div>
+          </>
+        )}
+      </div>
+
       <div style={{ fontFamily: FONT_DISPLAY, fontSize: 14, textTransform: 'uppercase', letterSpacing: '0.03em', color: C.paperDim, marginBottom: 12 }}>
         Daily summary preview
       </div>
@@ -1700,7 +1750,7 @@ function WhatsAppView({ sales, inventory, lowStockItems }) {
           background: '#005C4B', color: '#E9EDEF', borderRadius: '10px 10px 2px 10px', padding: '12px 14px',
           fontFamily: FONT_BODY, fontSize: 13, lineHeight: 1.6, maxWidth: '92%', marginLeft: 'auto',
         }}>
-          <div style={{ fontWeight: 700, marginBottom: 6 }}>📋 Apex Autos — {dateStr}</div>
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>📋 {business?.name || 'Apex Autos'} — {dateStr}</div>
           <div>Revenue today: <b>{naira(revenue)}</b></div>
           {topItem && <div>Best seller: <b>{topItem.name}</b> ({agg[topId]} sold)</div>}
           <div>Low stock alerts: <b>{lowStockItems.length} item{lowStockItems.length === 1 ? '' : 's'}</b></div>
