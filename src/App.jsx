@@ -609,13 +609,14 @@ function LoginScreen({ apiUrl, onLogin, onChangeApiUrl, onShowSignup }) {
 }
 
 function SignupScreen({ apiUrl, onSignup, onBackToLogin }) {
-  const [form, setForm] = useState({ businessName: '', ownerName: '', address: '', phone: '', pin: '', whatsappNumber: '' });
+  const [form, setForm] = useState({ businessName: '', ownerName: '', address: '', phone: '', pin: '', whatsappNumber: '', inviteCode: '' });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
   const set = (key, val) => setForm(f => ({ ...f, [key]: val }));
 
   const handleSignup = async () => {
+    if (!form.inviteCode.trim()) return setError('Invite code is required — contact TodayBread to get one');
     if (!form.businessName.trim()) return setError('Business name is required');
     if (!form.ownerName.trim()) return setError('Your name is required');
     if (!form.phone.trim()) return setError('Phone number is required');
@@ -632,6 +633,7 @@ function SignupScreen({ apiUrl, onSignup, onBackToLogin }) {
           phone: form.phone.trim(),
           pin: form.pin,
           whatsappNumber: form.whatsappNumber.trim() || form.phone.trim(),
+          inviteCode: form.inviteCode.trim(),
         },
       });
       await onSignup({ token: data.token, user: data.user, business: data.business });
@@ -655,6 +657,17 @@ function SignupScreen({ apiUrl, onSignup, onBackToLogin }) {
           Today<span style={{ color: C.amber }}>Bread</span>
         </div>
         <div style={{ color: C.paperDim, fontSize: 13, marginBottom: 20 }}>Set up your shop on TodayBread.</div>
+
+        <div style={{ background: `${C.amber}14`, border: `1px solid ${C.amber}44`, borderRadius: 8, padding: '10px 12px', marginBottom: 16 }}>
+          <label style={{ fontSize: 11, color: C.amber, fontWeight: 700 }}>Invite code</label>
+          <input
+            style={{ ...inputStyle, border: `1px solid ${C.amber}66`, background: C.ink, marginBottom: 0 }}
+            value={form.inviteCode}
+            onChange={e => set('inviteCode', e.target.value)}
+            placeholder="Enter your TodayBread invite code"
+          />
+          <div style={{ fontSize: 10, color: C.paperDim, marginTop: 5 }}>Don't have a code? Contact TodayBread to get access.</div>
+        </div>
 
         <label style={labelStyle}>Business name</label>
         <input style={inputStyle} value={form.businessName} onChange={e => set('businessName', e.target.value)} placeholder="e.g. Apex Autos Limited" />
