@@ -411,6 +411,22 @@ export default function TodayBread() {
     }
   };
 
+  const restockItem = async (item, qty) => {
+    try {
+      const res = await apiRequest(apiUrl, `/inventory/${item.dbId}/restock`, {
+        method: 'PATCH', token, body: { qty },
+      });
+      setInventoryLocal(inv => inv.map(i => i.id === item.id
+        ? { ...i, stock: res.stock, warehouseStock: res.warehouseStock }
+        : i
+      ));
+      return true;
+    } catch (e) {
+      alert(`Could not restock: ${e.message}`);
+      return false;
+    }
+  };
+
   const handleLogout = () => setAuth(null);
   const [authMode, setAuthMode] = useState('login');
 
@@ -460,7 +476,7 @@ export default function TodayBread() {
 
       <div style={{ padding: '16px', maxWidth: 720, margin: '0 auto' }}>
         {tab === 'inventory' && (
-          <InventoryView inventory={inventory} role={role} onSave={saveItem} onDelete={deleteItem} onClearAll={clearAllItems} onTogglePublic={togglePublic} />
+          <InventoryView inventory={inventory} role={role} onSave={saveItem} onDelete={deleteItem} onClearAll={clearAllItems} onTogglePublic={togglePublic} onRestock={restockItem} />
         )}
         {tab === 'sale' && (
           <SaleView inventory={inventory} onSubmit={recordSale} sales={sales} />
@@ -549,11 +565,15 @@ function LoginScreen({ apiUrl, onLogin, onChangeApiUrl, onShowSignup }) {
   const [pin, setPin] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [forgotMode, setForgotMode] = useState(false);
+  const [forgotPhone, setForgotPhone] = useState('');
+  const [forgotSent, setForgotSent] = useState(false);
+  const [forgotLoading, setForgotLoading] = useState(false);
+  const [forgotError, setForgotError] = useState('');
 
   const handleLogin = async () => {
     if (!phone || !pin) return setError('Enter your phone and PIN');
-    setLoading(true);
-    setError('');
+    setLoading(true); setError('');
     try {
       const data = await apiRequest(apiUrl, '/auth/login', { method: 'POST', body: { phone, pin } });
       const me = await apiRequest(apiUrl, '/me', { token: data.token }).catch(() => null);
@@ -566,43 +586,75 @@ function LoginScreen({ apiUrl, onLogin, onChangeApiUrl, onShowSignup }) {
     }
   };
 
+  const handleForgotPin = async () => {
+    if (!forgotPhone.trim()) return setForgotError('Enter your phone number');
+    setForgotLoading(true); setForgotError('');
+    try {
+      await apiRequest(apiUrl, '/auth/forgot-pin', { method: 'POST', body: { phone: forgotPhone.trim() } });
+      setForgotSent(true);
+    } catch (e) {
+      setForgotError(e.message || 'Could not find that account');
+    } finally {
+      setForgotLoading(false);
+    }
+  };
+
+  const inputStyle = { width: '100%', padding: '11px 12px', borderRadius: 8, border: `1px solid ${C.line}`, background: C.panel, color: C.paper, fontFamily: FONT_MONO, fontSize: 13, marginTop: 6, marginBottom: 12 };
+
   return (
     <div style={{ background: C.ink, backgroundImage: 'radial-gradient(circle, rgba(242,169,59,0.05) 1px, transparent 1px)', backgroundSize: '28px 28px', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, fontFamily: FONT_BODY }}>
       <div style={{ maxWidth: 360, width: '100%' }}>
         <div style={{ fontFamily: FONT_DISPLAY, fontSize: 24, color: C.paper, textTransform: 'uppercase', marginBottom: 6 }}>
           Today<span style={{ color: C.amber }}>Bread</span>
         </div>
-        <div style={{ color: C.paperDim, fontSize: 13, marginBottom: 20 }}>Sign in with your phone and PIN.</div>
 
-        <label style={{ fontSize: 11, color: C.paperDim, fontWeight: 600 }}>Phone number</label>
-        <input
-          value={phone} onChange={e => setPhone(e.target.value)} placeholder="2348012345678"
-          style={{ width: '100%', padding: '11px 12px', borderRadius: 8, border: `1px solid ${C.line}`, background: C.panel, color: C.paper, fontFamily: FONT_MONO, fontSize: 13, marginTop: 6, marginBottom: 12 }}
-        />
-        <label style={{ fontSize: 11, color: C.paperDim, fontWeight: 600 }}>PIN</label>
-        <input
-          value={pin} onChange={e => setPin(e.target.value)} type="password" placeholder="••••"
-          style={{ width: '100%', padding: '11px 12px', borderRadius: 8, border: `1px solid ${C.line}`, background: C.panel, color: C.paper, fontFamily: FONT_MONO, fontSize: 13, marginTop: 6, marginBottom: 12 }}
-        />
-        {error && <div style={{ color: C.red, fontSize: 12, marginBottom: 12 }}>{error}</div>}
-        <button
-          onClick={handleLogin} disabled={loading}
-          style={{ width: '100%', padding: '12px 0', borderRadius: 8, border: 'none', background: C.amber, color: C.ink, fontWeight: 700, fontSize: 14, cursor: 'pointer', marginBottom: 10 }}
-        >
-          {loading ? 'Signing in…' : 'Sign in'}
-        </button>
-        <button
-          onClick={onShowSignup}
-          style={{ width: '100%', padding: '10px 0', borderRadius: 8, border: `1px solid ${C.line}`, background: 'transparent', color: C.amber, fontSize: 13, fontWeight: 600, cursor: 'pointer', marginBottom: 10 }}
-        >
-          New shop? Create your business
-        </button>
-        <button
-          onClick={onChangeApiUrl}
-          style={{ width: '100%', padding: '8px 0', borderRadius: 8, border: 'none', background: 'transparent', color: C.paperDim, fontSize: 12, cursor: 'pointer' }}
-        >
-          Change backend URL
-        </button>
+        {!forgotMode ? (
+          <>
+            <div style={{ color: C.paperDim, fontSize: 13, marginBottom: 20 }}>Sign in with your phone and PIN.</div>
+            <label style={{ fontSize: 11, color: C.paperDim, fontWeight: 600 }}>Phone number</label>
+            <input value={phone} onChange={e => setPhone(e.target.value)} placeholder="2348012345678" style={inputStyle} />
+            <label style={{ fontSize: 11, color: C.paperDim, fontWeight: 600 }}>PIN</label>
+            <input value={pin} onChange={e => setPin(e.target.value)} type="password" placeholder="••••" style={inputStyle} />
+            {error && <div style={{ color: C.red, fontSize: 12, marginBottom: 12 }}>{error}</div>}
+            <button onClick={handleLogin} disabled={loading} style={{ width: '100%', padding: '12px 0', borderRadius: 8, border: 'none', background: C.amber, color: C.ink, fontWeight: 700, fontSize: 14, cursor: 'pointer', marginBottom: 10 }}>
+              {loading ? 'Signing in…' : 'Sign in'}
+            </button>
+            <button onClick={() => setForgotMode(true)} style={{ width: '100%', padding: '8px 0', borderRadius: 8, border: 'none', background: 'transparent', color: C.paperDim, fontSize: 12, cursor: 'pointer', marginBottom: 4 }}>
+              Forgot PIN?
+            </button>
+            <button onClick={onShowSignup} style={{ width: '100%', padding: '10px 0', borderRadius: 8, border: `1px solid ${C.line}`, background: 'transparent', color: C.amber, fontSize: 13, fontWeight: 600, cursor: 'pointer', marginBottom: 10 }}>
+              New shop? Create your business
+            </button>
+            <button onClick={onChangeApiUrl} style={{ width: '100%', padding: '8px 0', borderRadius: 8, border: 'none', background: 'transparent', color: C.paperDim, fontSize: 12, cursor: 'pointer' }}>
+              Change backend URL
+            </button>
+          </>
+        ) : forgotSent ? (
+          <>
+            <div style={{ background: `${C.teal}18`, border: `1px solid ${C.teal}55`, borderRadius: 10, padding: 16, marginTop: 10, marginBottom: 20 }}>
+              <div style={{ fontSize: 14, fontWeight: 600, color: C.teal, marginBottom: 6 }}>Request received ✓</div>
+              <div style={{ fontSize: 13, color: C.paperDim, lineHeight: 1.6 }}>
+                Your PIN reset request has been sent to TodayBread. We'll contact you on WhatsApp to verify your identity and set a new PIN.
+              </div>
+            </div>
+            <button onClick={() => { setForgotMode(false); setForgotSent(false); setForgotPhone(''); }} style={{ width: '100%', padding: '12px 0', borderRadius: 8, border: 'none', background: C.amber, color: C.ink, fontWeight: 700, fontSize: 14, cursor: 'pointer' }}>
+              Back to sign in
+            </button>
+          </>
+        ) : (
+          <>
+            <div style={{ color: C.paperDim, fontSize: 13, marginBottom: 20 }}>Enter your phone number and we'll send your reset request to TodayBread.</div>
+            <label style={{ fontSize: 11, color: C.paperDim, fontWeight: 600 }}>Your phone number</label>
+            <input value={forgotPhone} onChange={e => setForgotPhone(e.target.value)} placeholder="2348012345678" style={inputStyle} />
+            {forgotError && <div style={{ color: C.red, fontSize: 12, marginBottom: 12 }}>{forgotError}</div>}
+            <button onClick={handleForgotPin} disabled={forgotLoading} style={{ width: '100%', padding: '12px 0', borderRadius: 8, border: 'none', background: C.amber, color: C.ink, fontWeight: 700, fontSize: 14, cursor: 'pointer', marginBottom: 10 }}>
+              {forgotLoading ? 'Sending…' : 'Send reset request'}
+            </button>
+            <button onClick={() => { setForgotMode(false); setForgotError(''); }} style={{ width: '100%', padding: '8px 0', borderRadius: 8, border: 'none', background: 'transparent', color: C.paperDim, fontSize: 12, cursor: 'pointer' }}>
+              ← Back to sign in
+            </button>
+          </>
+        )}
       </div>
     </div>
   );
@@ -864,11 +916,14 @@ function Tag({ children, color }) {
   );
 }
 
-function InventoryView({ inventory, role, onSave, onDelete, onClearAll, onTogglePublic }) {
+function InventoryView({ inventory, role, onSave, onDelete, onClearAll, onTogglePublic, onRestock }) {
   const [filter, setFilter] = useState('All');
   const [editingItem, setEditingItem] = useState(undefined);
   const [confirmClearAll, setConfirmClearAll] = useState(false);
   const [clearing, setClearing] = useState(false);
+  const [restockTarget, setRestockTarget] = useState(null); // { item }
+  const [restockQty, setRestockQty] = useState(1);
+  const [restocking, setRestocking] = useState(false);
   const categories = ['All', ...new Set(inventory.map(i => i.category))];
   const items = filter === 'All' ? inventory : inventory.filter(i => i.category === filter);
 
@@ -931,6 +986,35 @@ function InventoryView({ inventory, role, onSave, onDelete, onClearAll, onToggle
         </div>
       )}
 
+      {/* Restock panel */}
+      {restockTarget && (
+        <div style={{ background: `${C.teal}14`, border: `1px solid ${C.teal}55`, borderRadius: 10, padding: 14, marginBottom: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Restock: {restockTarget.name}</div>
+          <div style={{ fontSize: 11, color: C.paperDim, marginBottom: 10 }}>
+            Warehouse: {restockTarget.warehouseStock} units available → moving to shop floor
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+            <span style={{ fontSize: 12, color: C.paperDim, fontWeight: 600 }}>Units to move</span>
+            <button onClick={() => setRestockQty(q => Math.max(1, q - 1))} style={{ width: 28, height: 28, borderRadius: 6, border: `1px solid ${C.line}`, background: C.panel, color: C.paper, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Minus size={12} /></button>
+            <input type="number" value={restockQty} min={1} max={restockTarget.warehouseStock} onChange={e => setRestockQty(Math.max(1, Math.min(restockTarget.warehouseStock, Number(e.target.value) || 1)))} style={{ width: 52, textAlign: 'center', padding: '5px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_MONO, fontSize: 14, fontWeight: 700 }} />
+            <button onClick={() => setRestockQty(q => Math.min(restockTarget.warehouseStock, q + 1))} style={{ width: 28, height: 28, borderRadius: 6, border: `1px solid ${C.line}`, background: C.panel, color: C.paper, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Plus size={12} /></button>
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={() => { setRestockTarget(null); setRestockQty(1); }} style={{ flex: 1, padding: '9px 0', borderRadius: 8, border: `1px solid ${C.line}`, background: 'transparent', color: C.paperDim, fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>Cancel</button>
+            <button
+              disabled={restocking}
+              onClick={async () => {
+                setRestocking(true);
+                const ok = await onRestock(restockTarget, restockQty);
+                setRestocking(false);
+                if (ok) { setRestockTarget(null); setRestockQty(1); }
+              }}
+              style={{ flex: 1, padding: '9px 0', borderRadius: 8, border: 'none', background: C.teal, color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}
+            >{restocking ? 'Moving…' : `Move ${restockQty} to shop`}</button>
+          </div>
+        </div>
+      )}
+
       {items.length > 0 && (
         <div style={{ display: 'flex', gap: 6, overflowX: 'auto', marginBottom: 14, paddingBottom: 4 }}>
           {categories.map(cat => (
@@ -982,14 +1066,16 @@ function InventoryView({ inventory, role, onSave, onDelete, onClearAll, onToggle
                 <div style={{ fontSize: 10, color: low ? C.red : C.paperDim, marginTop: 4, fontWeight: 600 }}>
                   {low ? 'RESTOCK FLOOR' : `reorder @ ${item.reorder}`}
                 </div>
+                {role === 'owner' && item.warehouseStock != null && item.warehouseStock > 0 && (
+                  <button
+                    onClick={e => { e.stopPropagation(); setRestockTarget(item); setRestockQty(1); setEditingItem(undefined); }}
+                    style={{ marginTop: 4, padding: '3px 8px', borderRadius: 5, border: 'none', cursor: 'pointer', fontSize: 10, fontWeight: 700, background: `${C.teal}33`, color: C.teal }}
+                  >↑ Restock floor</button>
+                )}
                 {role === 'owner' && (
                   <button
                     onClick={e => { e.stopPropagation(); onTogglePublic(item); }}
-                    style={{
-                      marginTop: 6, padding: '3px 8px', borderRadius: 5, border: 'none', cursor: 'pointer', fontSize: 10, fontWeight: 700,
-                      background: item.isPublic ? `${C.teal}33` : `${C.line}`,
-                      color: item.isPublic ? C.teal : C.paperDim,
-                    }}
+                    style={{ marginTop: 4, padding: '3px 8px', borderRadius: 5, border: 'none', cursor: 'pointer', fontSize: 10, fontWeight: 700, background: item.isPublic ? `${C.teal}33` : `${C.line}`, color: item.isPublic ? C.teal : C.paperDim }}
                   >{item.isPublic ? '🌐 Public' : 'Private'}</button>
                 )}
               </div>
@@ -2103,16 +2189,22 @@ function AdminDashboard({ apiUrl, token, onLogout }) {
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [pinResets, setPinResets] = useState([]);
+  const [resolvingPin, setResolvingPin] = useState(null);
+  const [newAdminPin, setNewAdminPin] = useState('');
+  const [pinResolveError, setPinResolveError] = useState('');
 
   useEffect(() => {
     (async () => {
       try {
-        const [s, b] = await Promise.all([
+        const [s, b, pr] = await Promise.all([
           apiRequest(apiUrl, '/admin/stats', { token }),
           apiRequest(apiUrl, '/admin/businesses', { token }),
+          apiRequest(apiUrl, '/admin/pin-resets', { token }).catch(() => ({ resets: [] })),
         ]);
         setStats(s);
         setBusinesses(b.businesses);
+        setPinResets(pr.resets || []);
       } catch (e) {
         setError(e.message);
       } finally {
@@ -2120,6 +2212,19 @@ function AdminDashboard({ apiUrl, token, onLogout }) {
       }
     })();
   }, [apiUrl, token]);
+
+  const handleResolvePin = async (userId) => {
+    if (!newAdminPin || newAdminPin.length < 4) return setPinResolveError('PIN must be at least 4 digits');
+    setPinResolveError('');
+    try {
+      await apiRequest(apiUrl, `/admin/pin-resets/${userId}/resolve`, { method: 'POST', token, body: { newPin: newAdminPin } });
+      setPinResets(pr => pr.filter(r => r.id !== userId));
+      setResolvingPin(null);
+      setNewAdminPin('');
+    } catch (e) {
+      setPinResolveError(e.message);
+    }
+  };
 
   const loadDetail = async (id) => {
     setSelected(id);
@@ -2177,6 +2282,43 @@ function AdminDashboard({ apiUrl, token, onLogout }) {
               <div key={label} style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 10, padding: '12px 14px' }}>
                 <div style={{ fontSize: 10, color: C.paperDim, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label}</div>
                 <div style={{ fontFamily: FONT_MONO, fontSize: 20, fontWeight: 700, color, marginTop: 4 }}>{value}</div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* PIN reset requests */}
+        {pinResets.length > 0 && (
+          <div style={{ background: `${C.red}14`, border: `1px solid ${C.red}55`, borderRadius: 10, padding: 14, marginBottom: 20 }}>
+            <div style={{ fontFamily: FONT_DISPLAY, fontSize: 13, textTransform: 'uppercase', letterSpacing: '0.03em', color: C.red, marginBottom: 10 }}>
+              🔐 PIN reset requests ({pinResets.length})
+            </div>
+            {pinResets.map(r => (
+              <div key={r.id} style={{ borderBottom: `1px solid ${C.line}`, paddingBottom: 10, marginBottom: 10 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>{r.name}</div>
+                    <div style={{ fontSize: 11, color: C.paperDim, fontFamily: FONT_MONO }}>{r.phone} · {r.business_name}</div>
+                  </div>
+                  <button
+                    onClick={() => { setResolvingPin(r.id); setNewAdminPin(''); setPinResolveError(''); }}
+                    style={{ padding: '5px 12px', borderRadius: 6, border: 'none', background: C.amber, color: C.ink, fontWeight: 700, fontSize: 12, cursor: 'pointer' }}
+                  >Reset PIN</button>
+                </div>
+                {resolvingPin === r.id && (
+                  <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <input
+                      type="password"
+                      value={newAdminPin}
+                      onChange={e => setNewAdminPin(e.target.value)}
+                      placeholder="New PIN (min 4 digits)"
+                      style={{ flex: 1, padding: '8px 10px', borderRadius: 7, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_MONO, fontSize: 13 }}
+                    />
+                    <button onClick={() => handleResolvePin(r.id)} style={{ padding: '8px 14px', borderRadius: 7, border: 'none', background: C.teal, color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>Confirm</button>
+                    <button onClick={() => setResolvingPin(null)} style={{ padding: '8px 10px', borderRadius: 7, border: `1px solid ${C.line}`, background: 'transparent', color: C.paperDim, fontSize: 13, cursor: 'pointer' }}>Cancel</button>
+                    {pinResolveError && <div style={{ width: '100%', color: C.red, fontSize: 12 }}>{pinResolveError}</div>}
+                  </div>
+                )}
               </div>
             ))}
           </div>
