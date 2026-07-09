@@ -2271,20 +2271,44 @@ function AdminDashboard({ apiUrl, token, onLogout }) {
 
         {/* Platform stats */}
         {stats && (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 20 }}>
-            {[
-              ['Businesses', stats.totalBusinesses, C.amber],
-              ['Total users', stats.totalUsers, C.paper],
-              ['Total sales', stats.totalSales, C.teal],
-              ['Platform revenue', naira(stats.totalRevenue), C.teal],
-              ['Inventory items', stats.totalItems, C.paperDim],
-            ].map(([label, value, color]) => (
-              <div key={label} style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 10, padding: '12px 14px' }}>
-                <div style={{ fontSize: 10, color: C.paperDim, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label}</div>
-                <div style={{ fontFamily: FONT_MONO, fontSize: 20, fontWeight: 700, color, marginTop: 4 }}>{value}</div>
+          <>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
+              {[
+                ['Total businesses', stats.totalBusinesses, C.amber],
+                ['Total users', stats.totalUsers, C.paper],
+                ['Total sales', stats.totalSales, C.teal],
+                ['Platform revenue', naira(stats.totalRevenue), C.teal],
+                ['Inventory items', stats.totalItems, C.paperDim],
+                ['New this week', stats.recentSignups, C.blue],
+              ].map(([label, value, color]) => (
+                <div key={label} style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 10, padding: '12px 14px' }}>
+                  <div style={{ fontSize: 10, color: C.paperDim, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label}</div>
+                  <div style={{ fontFamily: FONT_MONO, fontSize: 20, fontWeight: 700, color, marginTop: 4 }}>{value}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Active vs Ghost breakdown */}
+            <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 10, padding: '12px 14px', marginBottom: 20 }}>
+              <div style={{ fontSize: 10, color: C.paperDim, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 10 }}>Activity breakdown (last 7 days)</div>
+              <div style={{ display: 'flex', gap: 0 }}>
+                {/* Active bar */}
+                <div style={{ flex: stats.activeBusinesses || 1, background: C.teal, height: 8, borderRadius: '4px 0 0 4px' }} />
+                {/* Ghost bar */}
+                <div style={{ flex: stats.ghostBusinesses || 1, background: C.red + '88', height: 8, borderRadius: '0 4px 4px 0' }} />
               </div>
-            ))}
-          </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8 }}>
+                <div style={{ fontSize: 12 }}>
+                  <span style={{ color: C.teal, fontWeight: 700 }}>{stats.activeBusinesses}</span>
+                  <span style={{ color: C.paperDim }}> active — sold something this week</span>
+                </div>
+                <div style={{ fontSize: 12 }}>
+                  <span style={{ color: C.red, fontWeight: 700 }}>{stats.ghostBusinesses}</span>
+                  <span style={{ color: C.paperDim }}> ghost — never recorded a sale</span>
+                </div>
+              </div>
+            </div>
+          </>
         )}
 
         {/* PIN reset requests */}
