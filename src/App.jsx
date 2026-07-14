@@ -190,8 +190,10 @@ function useStorage(key, fallback) {
 }
 
 function useApiUrl() {
-  const [apiUrl, setApiUrlState, loaded] = useStorage('todaybread-api-url', null);
-  return [apiUrl, setApiUrlState, loaded];
+  // Backend URL is fixed — no need to ask users for it
+  const API_URL = 'https://todaybread.onrender.com';
+  const setApiUrlState = () => {}; // no-op, URL is fixed
+  return [API_URL, setApiUrlState, true];
 }
 
 function useAuth() {
@@ -433,13 +435,10 @@ export default function TodayBread() {
   if (!apiUrlLoaded || !authLoaded || !pendingLoaded) {
     return <LoadingScreen />;
   }
-  if (!apiUrl) {
-    return <ApiSetupScreen onSave={setApiUrl} />;
-  }
   if (!auth) {
     return authMode === 'signup'
       ? <SignupScreen apiUrl={apiUrl} onSignup={setAuth} onBackToLogin={() => setAuthMode('login')} />
-      : <LoginScreen apiUrl={apiUrl} onLogin={setAuth} onChangeApiUrl={() => setApiUrl(null)} onShowSignup={() => setAuthMode('signup')} />;
+      : <LoginScreen apiUrl={apiUrl} onLogin={setAuth} onShowSignup={() => setAuthMode('signup')} />;
   }
 
   // Super admin sees a completely different dashboard
@@ -560,7 +559,7 @@ function ApiSetupScreen({ onSave }) {
   );
 }
 
-function LoginScreen({ apiUrl, onLogin, onChangeApiUrl, onShowSignup }) {
+function LoginScreen({ apiUrl, onLogin, onShowSignup }) {
   const [phone, setPhone] = useState('');
   const [pin, setPin] = useState('');
   const [error, setError] = useState('');
@@ -625,9 +624,7 @@ function LoginScreen({ apiUrl, onLogin, onChangeApiUrl, onShowSignup }) {
             <button onClick={onShowSignup} style={{ width: '100%', padding: '10px 0', borderRadius: 8, border: `1px solid ${C.line}`, background: 'transparent', color: C.amber, fontSize: 13, fontWeight: 600, cursor: 'pointer', marginBottom: 10 }}>
               New shop? Create your business
             </button>
-            <button onClick={onChangeApiUrl} style={{ width: '100%', padding: '8px 0', borderRadius: 8, border: 'none', background: 'transparent', color: C.paperDim, fontSize: 12, cursor: 'pointer' }}>
-              Change backend URL
-            </button>
+
           </>
         ) : forgotSent ? (
           <>
