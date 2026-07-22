@@ -3,7 +3,7 @@ import {
   Fuel, Droplet, Package, TrendingUp, TrendingDown, AlertTriangle,
   RefreshCw, MessageCircle, Lock, Clock, ChevronRight, Plus, Minus,
   ShoppingCart, BarChart3, Wallet, Boxes, Wrench, Link2, Check, Sparkles, ArrowUp, ArrowDown, Timer, ArchiveX, Award,
-  Wifi, WifiOff, LogOut, Server, CloudUpload, AlertCircle, Users, ClipboardList
+  Wifi, WifiOff, LogOut, Server, CloudUpload, AlertCircle, Users, ClipboardList, Camera, Type
 } from 'lucide-react';
 
 /* ---------------------------------------------------------------
@@ -52,6 +52,21 @@ const CATEGORY_ICON = {
   'Grease & Sealant': Boxes,
   'Cleaner & Degreaser': Droplet,
 };
+
+// A small rotating palette so categories a tenant makes up themselves
+// (outside the auto-parts starter set above) still get a distinct,
+// consistent color/icon instead of all collapsing to the same gray.
+const FALLBACK_PALETTE = [C.teal, C.blue, C.brass, C.amber, C.red];
+function colorForCategory(category) {
+  if (CATEGORY_COLOR[category]) return CATEGORY_COLOR[category];
+  if (!category) return C.paperDim;
+  let hash = 0;
+  for (let i = 0; i < category.length; i++) hash = (hash * 31 + category.charCodeAt(i)) >>> 0;
+  return FALLBACK_PALETTE[hash % FALLBACK_PALETTE.length];
+}
+function iconForCategory(category) {
+  return CATEGORY_ICON[category] || Package;
+}
 
 const INITIAL_INVENTORY = [
   { id: 'TB-101', name: 'Toyota Genuine ATF Type T-IV', size: '1L', category: 'Transmission Fluid', brand: 'Toyota Genuine', cost: 2400, price: 3600, stock: 640, reorder: 150, origin: 'Tin-Can Island Port, Lagos' },
@@ -496,7 +511,7 @@ export default function TodayBread() {
           <StaffView apiUrl={apiUrl} token={token} />
         )}
         {tab === 'notebook' && role === 'owner' && (
-          <NotebookView inventory={inventory} onRecordSales={recordSale} onAddStock={saveItem} />
+          <NotebookView inventory={inventory} apiUrl={apiUrl} token={token} onRecordSales={recordSale} onAddStock={saveItem} />
         )}
       </div>
     </div>
@@ -921,7 +936,7 @@ function InventoryView({ inventory, role, onSave, onDelete, onClearAll, onToggle
   const [restockTarget, setRestockTarget] = useState(null); // { item }
   const [restockQty, setRestockQty] = useState(1);
   const [restocking, setRestocking] = useState(false);
-  const categories = ['All', ...new Set(inventory.map(i => i.category))];
+  const categories = ['All', ...new Set(inventory.map(i => i.category).filter(Boolean))];
   const items = filter === 'All' ? inventory : inventory.filter(i => i.category === filter);
 
   const handleSave = async (formItem) => {
@@ -1022,8 +1037,8 @@ function InventoryView({ inventory, role, onSave, onDelete, onClearAll, onToggle
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {items.map(item => {
-          const Icon = CATEGORY_ICON[item.category] || Package;
-          const catColor = CATEGORY_COLOR[item.category] || C.blue;
+          const Icon = iconForCategory(item.category);
+          const catColor = colorForCategory(item.category);
           const low = item.stock <= item.reorder;
           return (
             <div key={item.id} style={{
@@ -1043,7 +1058,7 @@ function InventoryView({ inventory, role, onSave, onDelete, onClearAll, onToggle
                 <div style={{ fontSize: 13, fontWeight: 600, lineHeight: 1.3 }}>{item.name}</div>
                 <div style={{ fontSize: 11, color: C.paperDim, marginTop: 2 }}>{item.brand} · {item.size} · {item.origin}</div>
                 <div style={{ marginTop: 6, display: 'flex', gap: 5 }}>
-                  <Tag color={catColor}>{item.category}</Tag>
+                  {item.category && <Tag color={catColor}>{item.category}</Tag>}
                   <Tag color={C.paperDim}>{item.brand}</Tag>
                 </div>
               </div>
@@ -1086,6 +1101,7 @@ function InventoryView({ inventory, role, onSave, onDelete, onClearAll, onToggle
         <ItemForm
           item={editingItem}
           existingIds={inventory.map(i => i.id)}
+          existingCategories={[...new Set(inventory.map(i => i.category).filter(Boolean))].sort()}
           onSave={handleSave}
           onDelete={editingItem ? () => handleDelete(editingItem.id) : null}
           onCancel={() => setEditingItem(undefined)}
@@ -1095,10 +1111,10 @@ function InventoryView({ inventory, role, onSave, onDelete, onClearAll, onToggle
   );
 }
 
-function ItemForm({ item, existingIds, onSave, onDelete, onCancel }) {
+function ItemForm({ item, existingIds, existingCategories, onSave, onDelete, onCancel }) {
   const isNew = !item;
   const [form, setForm] = useState(item || {
-    id: '', name: '', brand: '', category: 'Engine Oil', size: '', origin: '',
+    id: '', name: '', brand: '', category: '', size: '', origin: '',
     cost: 0, price: 0, stock: 0, warehouseStock: 0, reorder: 0,
   });
   const [error, setError] = useState('');
@@ -1114,6 +1130,7 @@ function ItemForm({ item, existingIds, onSave, onDelete, onCancel }) {
     onSave({
       ...form,
       id: form.id.trim(),
+      category: (form.category || '').trim(),
       cost: Number(form.cost) || 0,
       price: Number(form.price) || 0,
       stock: Number(form.stock) || 0,
@@ -1159,9 +1176,16 @@ function ItemForm({ item, existingIds, onSave, onDelete, onCancel }) {
           </label>
           <label>
             <span style={labelStyle}>Category</span>
-            <select style={inputStyle} value={form.category} onChange={e => set('category', e.target.value)}>
-              {Object.keys(CATEGORY_COLOR).map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
+            <input
+              style={inputStyle}
+              list="category-suggestions"
+              value={form.category || ''}
+              onChange={e => set('category', e.target.value)}
+              placeholder="Type any category — e.g. Skincare, Brake Fluid"
+            />
+            <datalist id="category-suggestions">
+              {existingCategories.map(c => <option key={c} value={c} />)}
+            </datalist>
           </label>
           <label>
             <span style={labelStyle}>Size</span>
@@ -1241,7 +1265,7 @@ function SaleView({ inventory, onSubmit, sales }) {
     ? available.filter(i =>
         i.name.toLowerCase().includes(search.toLowerCase()) ||
         i.brand.toLowerCase().includes(search.toLowerCase()) ||
-        i.category.toLowerCase().includes(search.toLowerCase()) ||
+        (i.category || '').toLowerCase().includes(search.toLowerCase()) ||
         i.id.toLowerCase().includes(search.toLowerCase())
       )
     : available;
@@ -1998,57 +2022,92 @@ function StaffView({ apiUrl, token }) {
 
 
 // ============================================================================
-// NOTEBOOK VIEW — paste Google Lens output, parse to sales or stock arrivals
+// NOTEBOOK VIEW — paste Google Lens text or upload a photo of the ledger,
+// backend (Claude vision / text) extracts rows, we fuzzy-match against real
+// inventory, owner reviews and confirms, then we commit through the same
+// recordSale/saveItem paths as the rest of the app (so offline queueing,
+// optimistic UI, etc. all keep working the same way).
 // ============================================================================
-function normalize(str) {
-  return String(str || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+
+function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      // reader.result is "data:image/jpeg;base64,AAAA..." — strip the prefix
+      const result = reader.result;
+      const commaIdx = result.indexOf(',');
+      resolve(commaIdx >= 0 ? result.slice(commaIdx + 1) : result);
+    };
+    reader.onerror = () => reject(new Error('Could not read the selected file'));
+    reader.readAsDataURL(file);
+  });
 }
 
-function fuzzyMatch(description, inventory) {
-  const target = normalize(description).split(' ').filter(w => w.length > 1);
-  if (target.length === 0) return null;
-  let best = null, bestScore = 0;
-  for (const item of inventory) {
-    const words = normalize(item.name + ' ' + item.brand + ' ' + item.category).split(' ').filter(Boolean);
-    const overlap = target.filter(w => words.some(iw => iw.includes(w) || w.includes(iw))).length;
-    const score = overlap / Math.max(target.length, 1);
-    if (score > bestScore && score >= 0.25) { bestScore = score; best = { item, confidence: score }; }
-  }
-  return best;
-}
-
-function parseLine(line) {
-  const qtyPatterns = [/[x×]\s*(\d+)/i, /(\d+)\s*pcs/i, /(\d+)\s*units?/i, /qty\s*[:\-]?\s*(\d+)/i, /(\d+)\s*cartons?/i, /(\d+)\s*bottles?/i];
-  let qty = 1;
-  let desc = line;
-  for (const pattern of qtyPatterns) {
-    const m = line.match(pattern);
-    if (m) { qty = parseInt(m[1]); desc = line.replace(m[0], '').trim(); break; }
-  }
-  desc = desc.replace(/[-–]\s*\d{4,}/g, '').trim();
-  desc = desc.replace(/^\d+\s+/, '').replace(/\s+\d+$/, '').trim();
-  return { desc: desc || line, qty };
-}
-
-function NotebookView({ inventory, onRecordSales, onAddStock }) {
-  const [mode, setMode] = useState('sales');
+function NotebookView({ inventory, apiUrl, token, onRecordSales, onAddStock }) {
+  const [mode, setMode] = useState('sales'); // sales | stock
+  const [inputMode, setInputMode] = useState('text'); // text | photo
   const [raw, setRaw] = useState('');
+  const [photoFile, setPhotoFile] = useState(null);
+  const [photoPreview, setPhotoPreview] = useState(null);
   const [parsed, setParsed] = useState(null);
   const [payment, setPayment] = useState('Cash');
+  const [parsing, setParsing] = useState(false);
   const [committing, setCommitting] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState('');
 
-  const handleParse = () => {
-    const lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
-    const results = lines.map(line => {
-      const { desc, qty } = parseLine(line);
-      const match = fuzzyMatch(desc, inventory);
-      return { rawLine: line, desc, qty, match, confirmed: !!match, overrideQty: qty };
-    });
-    setParsed(results);
-    setDone(false);
+  const handlePhotoSelect = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setPhotoFile(file);
+    setPhotoPreview(URL.createObjectURL(file));
     setError('');
+  };
+
+  const clearPhoto = () => {
+    setPhotoFile(null);
+    if (photoPreview) URL.revokeObjectURL(photoPreview);
+    setPhotoPreview(null);
+  };
+
+  const handleParse = async () => {
+    setError('');
+    if (inputMode === 'text' && !raw.trim()) return setError('Paste some ledger text first');
+    if (inputMode === 'photo' && !photoFile) return setError('Choose a photo first');
+
+    setParsing(true);
+    try {
+      let body;
+      if (inputMode === 'photo') {
+        const imageBase64 = await readFileAsBase64(photoFile);
+        body = { imageBase64, mediaType: photoFile.type || 'image/jpeg' };
+      } else {
+        body = { text: raw };
+      }
+
+      const data = await apiRequest(apiUrl, '/ocr/parse-page', { method: 'POST', token, body });
+
+      // Map the backend's AI-extracted rows onto this business's actual
+      // inventory (dbId is the backend's UUID, item.id is the frontend SKU).
+      const results = (data.rows || []).map(row => {
+        const matchedItem = row.matchedItem
+          ? inventory.find(i => i.dbId === row.matchedItem.id) || null
+          : null;
+        return {
+          rawLine: row.rawDescription,
+          desc: row.rawDescription,
+          overrideQty: row.quantity || 1,
+          match: matchedItem ? { item: matchedItem, confidence: row.matchedItem.confidence } : null,
+          confirmed: !!matchedItem && !row.needsReview,
+        };
+      });
+      setParsed(results);
+      setDone(false);
+    } catch (e) {
+      setError(e.message || 'Could not parse the ledger entry');
+    } finally {
+      setParsing(false);
+    }
   };
 
   const updateQty = (idx, val) => setParsed(p => p.map((r, i) => i === idx ? { ...r, overrideQty: Math.max(1, Number(val) || 1) } : r));
@@ -2070,7 +2129,7 @@ function NotebookView({ inventory, onRecordSales, onAddStock }) {
           await onAddStock({ ...row.match.item, stock: row.match.item.stock + row.overrideQty });
         }
       }
-      setDone(true); setRaw(''); setParsed(null);
+      setDone(true); setRaw(''); setParsed(null); clearPhoto();
     } catch (e) {
       setError(e.message || 'Could not record entries');
     } finally {
@@ -2080,17 +2139,26 @@ function NotebookView({ inventory, onRecordSales, onAddStock }) {
 
   const confirmedCount = parsed?.filter(r => r.confirmed && r.match).length || 0;
 
+  const inputToggleBtn = (m, label, Icon) => (
+    <button
+      onClick={() => { setInputMode(m); setError(''); }}
+      style={{ flex: 1, padding: '9px 0', borderRadius: 6, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, background: inputMode === m ? C.amber : 'transparent', color: inputMode === m ? C.ink : C.paperDim, fontFamily: FONT_BODY, fontWeight: 600, fontSize: 12 }}
+    >
+      <Icon size={13} /> {label}
+    </button>
+  );
+
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
         <ClipboardList size={16} color={C.amber} />
         <div>
-          <div style={{ fontFamily: FONT_DISPLAY, fontSize: 15, textTransform: 'uppercase', letterSpacing: '0.03em' }}>Paste from notebook</div>
-          <div style={{ fontSize: 11, color: C.paperDim, marginTop: 2 }}>Use Google Lens to scan your notebook page → copy text → paste below</div>
+          <div style={{ fontFamily: FONT_DISPLAY, fontSize: 15, textTransform: 'uppercase', letterSpacing: '0.03em' }}>Notebook</div>
+          <div style={{ fontSize: 11, color: C.paperDim, marginTop: 2 }}>Paste text from Google Lens, or upload a photo of the page directly</div>
         </div>
       </div>
 
-      <div style={{ display: 'flex', background: C.panel, borderRadius: 8, border: `1px solid ${C.line}`, padding: 3, marginBottom: 14, width: 'fit-content' }}>
+      <div style={{ display: 'flex', background: C.panel, borderRadius: 8, border: `1px solid ${C.line}`, padding: 3, marginBottom: 12, width: 'fit-content' }}>
         {[['sales', 'Recording Sales'], ['stock', 'Stock Arrival']].map(([m, label]) => (
           <button key={m} onClick={() => setMode(m)} style={{ padding: '7px 16px', borderRadius: 6, border: 'none', cursor: 'pointer', background: mode === m ? C.amber : 'transparent', color: mode === m ? C.ink : C.paperDim, fontFamily: FONT_BODY, fontWeight: 600, fontSize: 12 }}>{label}</button>
         ))}
@@ -2098,16 +2166,51 @@ function NotebookView({ inventory, onRecordSales, onAddStock }) {
 
       {!parsed && (
         <>
-          <textarea
-            value={raw}
-            onChange={e => setRaw(e.target.value)}
-            placeholder={mode === 'sales'
-              ? 'Paste your Google Lens text here. Examples:\n\nCastrol brake fluid x5\nMobil 20-50 engine oil 2pcs\nTotal gear oil x10\nair freshner 12'
-              : 'Paste your Google Lens text here. Examples:\n\nCastrol dot 3 x100\nMobil 5W-30 20 bottles\nShell Helix 10W-40 x50\nPrestone coolant 30'}
-            style={{ width: '100%', minHeight: 200, padding: '12px', borderRadius: 8, border: `1px solid ${C.line}`, background: C.panel, color: C.paper, fontFamily: FONT_MONO, fontSize: 13, lineHeight: 1.6, resize: 'vertical' }}
-          />
-          <button onClick={handleParse} disabled={!raw.trim()} style={{ width: '100%', marginTop: 12, padding: '12px 0', borderRadius: 8, border: 'none', background: raw.trim() ? C.amber : C.line, color: raw.trim() ? C.ink : C.paperDim, fontFamily: FONT_BODY, fontWeight: 700, fontSize: 14, cursor: raw.trim() ? 'pointer' : 'default' }}>
-            Parse entries
+          <div style={{ display: 'flex', background: C.panel, borderRadius: 8, border: `1px solid ${C.line}`, padding: 3, marginBottom: 14 }}>
+            {inputToggleBtn('text', 'Paste text', Type)}
+            {inputToggleBtn('photo', 'Upload photo', Camera)}
+          </div>
+
+          {inputMode === 'text' ? (
+            <textarea
+              value={raw}
+              onChange={e => setRaw(e.target.value)}
+              placeholder={mode === 'sales'
+                ? 'Paste your Google Lens text here — any format is fine. Examples:\n\nCastrol brake fluid x5\nMobil 20-50 engine oil 2pcs\nTotal gear oil x10'
+                : 'Paste your Google Lens text here — any format is fine. Examples:\n\nCastrol dot 3 x100\nMobil 5W-30 20 bottles\nShell Helix 10W-40 x50'}
+              style={{ width: '100%', minHeight: 200, padding: '12px', borderRadius: 8, border: `1px solid ${C.line}`, background: C.panel, color: C.paper, fontFamily: FONT_MONO, fontSize: 13, lineHeight: 1.6, resize: 'vertical' }}
+            />
+          ) : (
+            <div>
+              {!photoPreview ? (
+                <label style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, minHeight: 200, borderRadius: 8, border: `1px dashed ${C.line}`, background: C.panel, color: C.paperDim, cursor: 'pointer', fontSize: 13 }}>
+                  <Camera size={26} style={{ opacity: 0.6 }} />
+                  Tap to take or choose a photo of your ledger page
+                  <input type="file" accept="image/*" capture="environment" onChange={handlePhotoSelect} style={{ display: 'none' }} />
+                </label>
+              ) : (
+                <div style={{ position: 'relative' }}>
+                  <img src={photoPreview} alt="Ledger page" style={{ width: '100%', maxHeight: 320, objectFit: 'contain', borderRadius: 8, border: `1px solid ${C.line}`, background: C.ink }} />
+                  <button onClick={clearPhoto} style={{ position: 'absolute', top: 8, right: 8, background: 'rgba(0,0,0,0.6)', border: 'none', borderRadius: 6, color: '#fff', padding: '5px 10px', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>Remove</button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {error && <div style={{ color: C.red, fontSize: 12, marginTop: 10 }}>{error}</div>}
+
+          <button
+            onClick={handleParse}
+            disabled={parsing || (inputMode === 'text' ? !raw.trim() : !photoFile)}
+            style={{
+              width: '100%', marginTop: 12, padding: '12px 0', borderRadius: 8, border: 'none',
+              background: parsing ? C.line : ((inputMode === 'text' ? raw.trim() : photoFile) ? C.amber : C.line),
+              color: (inputMode === 'text' ? raw.trim() : photoFile) ? C.ink : C.paperDim,
+              fontFamily: FONT_BODY, fontWeight: 700, fontSize: 14,
+              cursor: (inputMode === 'text' ? raw.trim() : photoFile) ? 'pointer' : 'default',
+            }}
+          >
+            {parsing ? 'Reading entries…' : 'Parse entries'}
           </button>
         </>
       )}
@@ -2116,7 +2219,7 @@ function NotebookView({ inventory, onRecordSales, onAddStock }) {
         <>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
             <div style={{ fontSize: 12, color: C.paperDim }}>{parsed.length} line{parsed.length !== 1 ? 's' : ''} parsed — review before confirming</div>
-            <button onClick={() => setParsed(null)} style={{ fontSize: 11, color: C.paperDim, background: 'none', border: 'none', cursor: 'pointer' }}>← Edit text</button>
+            <button onClick={() => setParsed(null)} style={{ fontSize: 11, color: C.paperDim, background: 'none', border: 'none', cursor: 'pointer' }}>← Start over</button>
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
@@ -2169,7 +2272,7 @@ function NotebookView({ inventory, onRecordSales, onAddStock }) {
           <Check size={32} color={C.teal} style={{ marginBottom: 12 }} />
           <div style={{ fontSize: 15, fontWeight: 600, color: C.paper, marginBottom: 6 }}>All done</div>
           <div style={{ fontSize: 13, color: C.paperDim, marginBottom: 20 }}>Entries recorded successfully from your notebook.</div>
-          <button onClick={() => setDone(false)} style={{ padding: '10px 24px', borderRadius: 8, border: 'none', background: C.amber, color: C.ink, fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>Paste another page</button>
+          <button onClick={() => setDone(false)} style={{ padding: '10px 24px', borderRadius: 8, border: 'none', background: C.amber, color: C.ink, fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>Add another page</button>
         </div>
       )}
     </div>
