@@ -68,86 +68,6 @@ function iconForCategory(category) {
   return CATEGORY_ICON[category] || Package;
 }
 
-const INITIAL_INVENTORY = [
-  { id: 'TB-101', name: 'Toyota Genuine ATF Type T-IV', size: '1L', category: 'Transmission Fluid', brand: 'Toyota Genuine', cost: 2400, price: 3600, stock: 640, reorder: 150, origin: 'Tin-Can Island Port, Lagos' },
-  { id: 'TB-102', name: 'Honda Genuine CVT Fluid', size: '1L', category: 'Transmission Fluid', brand: 'Honda Genuine', cost: 2600, price: 3900, stock: 380, reorder: 100, origin: 'Tin-Can Island Port, Lagos' },
-  { id: 'TB-103', name: 'Total Transmission Gear Oil 80W-90', size: '1L', category: 'Transmission Fluid', brand: 'Total', cost: 1800, price: 2800, stock: 520, reorder: 130, origin: 'Apapa Port, Lagos' },
-  { id: 'TB-104', name: 'Castrol DOT 3 Brake Fluid', size: '500ml', category: 'Brake Fluid', brand: 'Castrol', cost: 1100, price: 1850, stock: 1800, reorder: 400, origin: 'Apapa Port, Lagos' },
-  { id: 'TB-105', name: 'Bosch DOT 4 Brake Fluid', size: '500ml', category: 'Brake Fluid', brand: 'Bosch', cost: 1350, price: 2200, stock: 900, reorder: 250, origin: 'Tin-Can Island Port, Lagos' },
-  { id: 'TB-106', name: 'Liqui Moly Brake Cleaner Spray', size: '450ml', category: 'Cleaner & Degreaser', brand: 'Liqui Moly', cost: 1650, price: 2700, stock: 40, reorder: 150, origin: 'Tin-Can Island Port, Lagos' },
-  { id: 'TB-107', name: 'Mobil 1 5W-30 Synthetic Engine Oil', size: '4L', category: 'Engine Oil', brand: 'Mobil', cost: 8400, price: 12200, stock: 360, reorder: 100, origin: 'Apapa Port, Lagos' },
-  { id: 'TB-108', name: 'Total Quartz 20W-50 Engine Oil', size: '4L', category: 'Engine Oil', brand: 'Total', cost: 6700, price: 9800, stock: 840, reorder: 220, origin: 'Apapa Port, Lagos' },
-  { id: 'TB-109', name: 'Shell Helix 10W-40 Engine Oil', size: '4L', category: 'Engine Oil', brand: 'Shell', cost: 7400, price: 10700, stock: 490, reorder: 150, origin: 'Apapa Port, Lagos' },
-  { id: 'TB-110', name: 'Prestone Long Life Coolant — Green', size: '1L', category: 'Coolant', brand: 'Prestone', cost: 1150, price: 1950, stock: 700, reorder: 200, origin: 'Cotonou, Benin Republic' },
-  { id: 'TB-111', name: 'Valvoline Long Life Coolant — Red OAT', size: '1L', category: 'Coolant', brand: 'Valvoline', cost: 1250, price: 2100, stock: 70, reorder: 180, origin: 'Cotonou, Benin Republic' },
-  { id: 'TB-112', name: 'Prestone Radiator Stop Leak', size: '300ml', category: 'Coolant', brand: 'Prestone', cost: 1450, price: 2450, stock: 260, reorder: 100, origin: 'Cotonou, Benin Republic' },
-  { id: 'TB-113', name: 'Armor All Dashboard Shine Spray — Citrus', size: '300ml', category: 'Dashboard & Interior', brand: 'Armor All', cost: 1000, price: 1850, stock: 1450, reorder: 350, origin: 'Cotonou, Benin Republic' },
-  { id: 'TB-114', name: 'Armor All Leather & Vinyl Cleaner', size: '300ml', category: 'Dashboard & Interior', brand: 'Armor All', cost: 1300, price: 2250, stock: 560, reorder: 180, origin: 'Cotonou, Benin Republic' },
-  { id: 'TB-115', name: 'STP Tyre Shine Spray', size: '500ml', category: 'Dashboard & Interior', brand: 'STP', cost: 1550, price: 2650, stock: 400, reorder: 150, origin: 'Tin-Can Island Port, Lagos' },
-  { id: 'TB-116', name: 'Little Trees Air Freshener Vent Clip — Vanilla (3pk)', size: '3pk', category: 'Dashboard & Interior', brand: 'Little Trees', cost: 700, price: 1400, stock: 2200, reorder: 500, origin: 'Tin-Can Island Port, Lagos' },
-  { id: 'TB-117', name: 'Toyota Genuine Power Steering Fluid', size: '500ml', category: 'Power Steering', brand: 'Toyota Genuine', cost: 1650, price: 2750, stock: 300, reorder: 110, origin: 'Tin-Can Island Port, Lagos' },
-  { id: 'TB-118', name: 'Permatex Silicone Grease Tube', size: '100g', category: 'Grease & Sealant', brand: 'Permatex', cost: 850, price: 1550, stock: 640, reorder: 180, origin: 'Apapa Port, Lagos' },
-  { id: 'TB-119', name: 'Permatex Gasket Sealant (RTV)', size: '85g', category: 'Grease & Sealant', brand: 'Permatex', cost: 1750, price: 2950, stock: 190, reorder: 100, origin: 'Apapa Port, Lagos' },
-  { id: 'TB-120', name: 'Loctite Multi-Purpose Grease Tub', size: '500g', category: 'Grease & Sealant', brand: 'Loctite', cost: 2450, price: 3900, stock: 140, reorder: 80, origin: 'Apapa Port, Lagos' },
-  { id: 'TB-121', name: 'Liqui Moly Carburetor Cleaner Spray', size: '400ml', category: 'Cleaner & Degreaser', brand: 'Liqui Moly', cost: 1450, price: 2500, stock: 460, reorder: 150, origin: 'Tin-Can Island Port, Lagos' },
-  { id: 'TB-122', name: 'STP Fuel Injector Cleaner', size: '300ml', category: 'Cleaner & Degreaser', brand: 'STP', cost: 1850, price: 3150, stock: 330, reorder: 120, origin: 'Tin-Can Island Port, Lagos' },
-  { id: 'TB-123', name: 'Total Engine Degreaser', size: '1L', category: 'Cleaner & Degreaser', brand: 'Total', cost: 1700, price: 2850, stock: 720, reorder: 220, origin: 'Apapa Port, Lagos' },
-  { id: 'TB-124', name: 'Prestone Windscreen Washer Fluid Concentrate', size: '500ml', category: 'Cleaner & Degreaser', brand: 'Prestone', cost: 900, price: 1650, stock: 1050, reorder: 300, origin: 'Cotonou, Benin Republic' },
-  { id: 'TB-125', name: 'Bosch Battery Terminal Protector Spray', size: '200ml', category: 'Grease & Sealant', brand: 'Bosch', cost: 1050, price: 1950, stock: 230, reorder: 120, origin: 'Tin-Can Island Port, Lagos' },
-  { id: 'TB-126', name: 'Loctite Chain & Cable Lubricant Spray', size: '300ml', category: 'Grease & Sealant', brand: 'Loctite', cost: 1250, price: 2200, stock: 490, reorder: 160, origin: 'Apapa Port, Lagos' },
-  { id: 'TB-127', name: 'STP Heavy Duty Hand Cleaner Paste', size: '500g', category: 'Cleaner & Degreaser', brand: 'STP', cost: 1500, price: 2650, stock: 290, reorder: 100, origin: 'Tin-Can Island Port, Lagos' },
-  { id: 'TB-128', name: 'Liqui Moly Diesel Injector Cleaner', size: '300ml', category: 'Cleaner & Degreaser', brand: 'Liqui Moly', cost: 1950, price: 3350, stock: 250, reorder: 100, origin: 'Tin-Can Island Port, Lagos' },
-  { id: 'TB-129', name: 'Honda Genuine Synthetic Gear Oil 75W-140', size: '1L', category: 'Transmission Fluid', brand: 'Honda Genuine', cost: 2750, price: 4250, stock: 210, reorder: 100, origin: 'Tin-Can Island Port, Lagos' },
-  { id: 'TB-130', name: 'Castrol Premium Brake Fluid DOT 5.1', size: '500ml', category: 'Brake Fluid', brand: 'Castrol', cost: 1650, price: 2750, stock: 170, reorder: 100, origin: 'Apapa Port, Lagos' },
-  { id: 'TB-131', name: 'Prestone AC Refrigerant Leak Sealant', size: '250ml', category: 'Coolant', brand: 'Prestone', cost: 2150, price: 3600, stock: 130, reorder: 80, origin: 'Cotonou, Benin Republic' },
-  { id: 'TB-132', name: 'Armor All Headlight Restoration Kit', size: '1 kit', category: 'Dashboard & Interior', brand: 'Armor All', cost: 2500, price: 4200, stock: 180, reorder: 90, origin: 'Cotonou, Benin Republic' },
-];
-
-// Deterministic PRNG so the demo sales history looks the same on every load
-function mulberry32(seed) {
-  return function () {
-    seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
-    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-function generateSeedHistory(inventory) {
-  const rand = mulberry32(20260101);
-  const fastMovers = ['TB-113', 'TB-123', 'TB-104', 'TB-101', 'TB-124', 'TB-108'];
-  const weighted = [...inventory.map(i => i.id), ...fastMovers, ...fastMovers, ...fastMovers];
-  const sales = [];
-  const now = new Date();
-  let counter = 0;
-  for (let day = 13; day >= 0; day--) {
-    const txCount = 8 + Math.floor(rand() * 12);
-    for (let t = 0; t < txCount; t++) {
-      const itemId = weighted[Math.floor(rand() * weighted.length)];
-      const item = inventory.find(i => i.id === itemId);
-      if (!item) continue;
-      const qty = 1 + Math.floor(rand() * 3);
-      const payRoll = rand();
-      const payment = payRoll < 0.5 ? 'Cash' : payRoll < 0.8 ? 'Transfer' : 'POS';
-      const ts = new Date(now);
-      ts.setDate(ts.getDate() - day);
-      ts.setHours(8 + Math.floor(rand() * 10), Math.floor(rand() * 60), 0, 0);
-      sales.push({
-        id: `S-${counter++}`,
-        itemId: item.id,
-        itemName: item.name,
-        qty,
-        unitPrice: item.price,
-        unitCost: item.cost,
-        payment,
-        staff: rand() < 0.5 ? 'Owner' : 'Chidi (Staff)',
-        timestamp: ts.toISOString(),
-      });
-    }
-  }
-  return sales;
-}
-
 function naira(n) {
   return '₦' + Math.round(n).toLocaleString('en-NG');
 }
@@ -298,6 +218,7 @@ export default function TodayBread() {
         cost: Number(i.cost_price || 0), price: Number(i.sale_price), stock: i.stock,
         warehouseStock: i.warehouse_stock != null ? Number(i.warehouse_stock) : null,
         reorder: i.reorder_level, origin: i.origin, isPublic: !!i.is_public,
+        expiryDate: i.expiry_date || '', batchNumber: i.batch_number || '',
       }));
       const mappedSales = salesRes.sales.map(s => ({
         id: s.id, itemId: s.item_id, itemName: s.item_name, qty: s.qty,
@@ -369,23 +290,32 @@ export default function TodayBread() {
 
   // owner-only inventory CRUD, talking straight to the live API
   const saveItem = async (formItem) => {
-    const isNew = !inventory.some(i => i.id === formItem.id) && !formItem.dbId;
+    // ItemForm passes an explicit isNew flag; other callers (e.g. Notebook's
+    // stock-arrival flow, which always edits an existing item) don't, so fall
+    // back to checking for a dbId in that case.
+    const isNew = formItem.isNew !== undefined ? formItem.isNew : !formItem.dbId;
     try {
       if (isNew) {
         const res = await apiRequest(apiUrl, '/inventory', {
           method: 'POST', token, body: {
-            sku: formItem.id, name: formItem.name, brand: formItem.brand, size: formItem.size, category: formItem.category,
+            name: formItem.name, brand: formItem.brand, size: formItem.size, category: formItem.category,
             costPrice: formItem.cost, salePrice: formItem.price, stock: formItem.stock,
             warehouseStock: formItem.warehouseStock || 0, reorderLevel: formItem.reorder, origin: formItem.origin,
+            expiryDate: formItem.expiryDate || null, batchNumber: formItem.batchNumber || null,
           },
         });
-        setInventoryLocal(inv => [...inv, { ...formItem, dbId: res.item.id }]);
+        // SKU is generated server-side now — use it as this item's local id.
+        setInventoryLocal(inv => [...inv, {
+          ...formItem, id: res.item.sku, dbId: res.item.id,
+          expiryDate: res.item.expiry_date, batchNumber: res.item.batch_number,
+        }]);
       } else {
         await apiRequest(apiUrl, `/inventory/${formItem.dbId}`, {
           method: 'PUT', token, body: {
             name: formItem.name, brand: formItem.brand, size: formItem.size, category: formItem.category,
             costPrice: formItem.cost, salePrice: formItem.price, stock: formItem.stock,
             warehouseStock: formItem.warehouseStock || 0, reorderLevel: formItem.reorder, origin: formItem.origin,
+            expiryDate: formItem.expiryDate || null, batchNumber: formItem.batchNumber || null,
           },
         });
         setInventoryLocal(inv => inv.map(i => i.id === formItem.id ? formItem : i));
@@ -485,6 +415,8 @@ export default function TodayBread() {
       <SyncBar pendingCount={pending.length} syncStatus={syncStatus} loadError={loadError} onRetry={() => { loadData(); syncPending(); }} />
 
       <Header business={auth.business} onLogout={handleLogout} />
+
+      {role === 'owner' && <SubscriptionBanner business={auth.business} />}
 
       <TabBar role={role} tab={tab} setTab={setTab} lowStockCount={lowStockItems.length} />
 
@@ -734,7 +666,7 @@ function SignupScreen({ apiUrl, onSignup, onBackToLogin }) {
         </div>
 
         <label style={labelStyle}>Business name</label>
-        <input style={inputStyle} value={form.businessName} onChange={e => set('businessName', e.target.value)} placeholder="e.g. Apex Autos Limited" />
+        <input style={inputStyle} value={form.businessName} onChange={e => set('businessName', e.target.value)} placeholder="e.g. Your Business Name Ltd" />
 
         <label style={labelStyle}>Shop address</label>
         <input style={inputStyle} value={form.address} onChange={e => set('address', e.target.value)} placeholder="e.g. Block C, Shop 14, Trade Fair Complex, Lagos" />
@@ -875,6 +807,52 @@ function Header({ business, onLogout }) {
       </button>
     </div>
   );
+}
+
+function SubscriptionBanner({ business }) {
+  if (!business?.trial_ends_at && !business?.next_due_date) return null;
+
+  const now = new Date();
+  const trialEndsAt = business.trial_ends_at ? new Date(business.trial_ends_at) : null;
+  const nextDueDate = business.next_due_date ? new Date(business.next_due_date) : null;
+  const fee = business.monthly_fee != null ? Number(business.monthly_fee) : 10000;
+
+  const inTrial = trialEndsAt && now < trialEndsAt;
+  const daysLeftInTrial = inTrial ? Math.ceil((trialEndsAt - now) / 86400000) : null;
+  const overdue = !inTrial && nextDueDate && now > nextDueDate;
+  const daysUntilDue = nextDueDate ? Math.ceil((nextDueDate - now) / 86400000) : null;
+  const dueDateStr = nextDueDate ? nextDueDate.toLocaleDateString('en-NG', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+
+  // Quiet during trial and while comfortably within the current cycle —
+  // only speak up once payment is close or already late.
+  if (inTrial) {
+    return (
+      <div style={{ maxWidth: 720, margin: '0 auto', padding: '0 16px 10px' }}>
+        <div style={{ fontSize: 11, color: C.paperDim, background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, padding: '7px 12px' }}>
+          {daysLeftInTrial} day{daysLeftInTrial === 1 ? '' : 's'} left in your free trial
+        </div>
+      </div>
+    );
+  }
+  if (overdue) {
+    return (
+      <div style={{ maxWidth: 720, margin: '0 auto', padding: '0 16px 10px' }}>
+        <div style={{ fontSize: 11, color: C.red, background: `${C.red}18`, border: `1px solid ${C.red}55`, borderRadius: 8, padding: '7px 12px', fontWeight: 600 }}>
+          Payment of {naira(fee)} overdue since {dueDateStr}
+        </div>
+      </div>
+    );
+  }
+  if (daysUntilDue !== null && daysUntilDue <= 7) {
+    return (
+      <div style={{ maxWidth: 720, margin: '0 auto', padding: '0 16px 10px' }}>
+        <div style={{ fontSize: 11, color: C.amber, background: `${C.amber}18`, border: `1px solid ${C.amber}55`, borderRadius: 8, padding: '7px 12px', fontWeight: 600 }}>
+          {naira(fee)} due on {dueDateStr}
+        </div>
+      </div>
+    );
+  }
+  return null;
 }
 
 function TabBar({ role, tab, setTab, lowStockCount }) {
@@ -1040,9 +1018,17 @@ function InventoryView({ inventory, role, onSave, onDelete, onClearAll, onToggle
           const Icon = iconForCategory(item.category);
           const catColor = colorForCategory(item.category);
           const low = item.stock <= item.reorder;
+          const costNotSet = !item.cost || Number(item.cost) === 0;
+          let daysToExpiry = null;
+          if (item.expiryDate) {
+            const diff = new Date(item.expiryDate) - new Date();
+            daysToExpiry = Math.ceil(diff / 86400000);
+          }
+          const expired = daysToExpiry !== null && daysToExpiry < 0;
+          const expiringSoon = daysToExpiry !== null && daysToExpiry >= 0 && daysToExpiry <= 30;
           return (
             <div key={item.id} style={{
-              background: C.panel, border: `1px solid ${low ? C.red + '55' : C.line}`, borderRadius: 10,
+              background: C.panel, border: `1px solid ${expired ? C.red + '88' : low || expiringSoon ? C.red + '55' : C.line}`, borderRadius: 10,
               padding: 12, display: 'flex', alignItems: 'center', gap: 12,
               cursor: role === 'owner' ? 'pointer' : 'default',
             }}
@@ -1054,18 +1040,24 @@ function InventoryView({ inventory, role, onSave, onDelete, onClearAll, onToggle
                   <Icon size={12} color={catColor} />
                   <span style={{ fontFamily: FONT_MONO, fontSize: 10, color: C.paperDim }}>{item.id}</span>
                   {low && <AlertTriangle size={12} color={C.red} />}
+                  {(expired || expiringSoon) && <Clock size={12} color={expired ? C.red : C.amber} />}
                 </div>
                 <div style={{ fontSize: 13, fontWeight: 600, lineHeight: 1.3 }}>{item.name}</div>
                 <div style={{ fontSize: 11, color: C.paperDim, marginTop: 2 }}>{item.brand} · {item.size} · {item.origin}</div>
-                <div style={{ marginTop: 6, display: 'flex', gap: 5 }}>
+                <div style={{ marginTop: 6, display: 'flex', gap: 5, flexWrap: 'wrap' }}>
                   {item.category && <Tag color={catColor}>{item.category}</Tag>}
                   <Tag color={C.paperDim}>{item.brand}</Tag>
+                  {costNotSet && <Tag color={C.paperDim}>Cost not set</Tag>}
+                  {expired && <Tag color={C.red}>Expired</Tag>}
+                  {!expired && expiringSoon && <Tag color={C.amber}>Expires in {daysToExpiry}d</Tag>}
                 </div>
               </div>
               <div style={{ textAlign: 'right', flexShrink: 0 }}>
                 <div style={{ fontFamily: FONT_MONO, fontSize: 14, fontWeight: 700, color: C.paper }}>{naira(item.price)}</div>
                 {role === 'owner' && (
-                  <div style={{ fontFamily: FONT_MONO, fontSize: 10, color: C.paperDim, marginTop: 2 }}>cost {naira(item.cost)}</div>
+                  costNotSet
+                    ? <div style={{ fontFamily: FONT_MONO, fontSize: 10, color: C.paperDim, marginTop: 2, fontStyle: 'italic' }}>cost not set</div>
+                    : <div style={{ fontFamily: FONT_MONO, fontSize: 10, color: C.paperDim, marginTop: 2 }}>cost {naira(item.cost)}</div>
                 )}
                 {role === 'owner' && item.warehouseStock != null && (
                   <div style={{ marginTop: 6, textAlign: 'right' }}>
@@ -1100,7 +1092,6 @@ function InventoryView({ inventory, role, onSave, onDelete, onClearAll, onToggle
       {editingItem !== undefined && (
         <ItemForm
           item={editingItem}
-          existingIds={inventory.map(i => i.id)}
           existingCategories={[...new Set(inventory.map(i => i.category).filter(Boolean))].sort()}
           onSave={handleSave}
           onDelete={editingItem ? () => handleDelete(editingItem.id) : null}
@@ -1111,11 +1102,12 @@ function InventoryView({ inventory, role, onSave, onDelete, onClearAll, onToggle
   );
 }
 
-function ItemForm({ item, existingIds, existingCategories, onSave, onDelete, onCancel }) {
+function ItemForm({ item, existingCategories, onSave, onDelete, onCancel }) {
   const isNew = !item;
   const [form, setForm] = useState(item || {
-    id: '', name: '', brand: '', category: '', size: '', origin: '',
-    cost: 0, price: 0, stock: 0, warehouseStock: 0, reorder: 0,
+    name: '', brand: '', category: '', size: '', origin: '',
+    cost: 0, price: '', stock: 0, warehouseStock: 0, reorder: 0,
+    expiryDate: '', batchNumber: '',
   });
   const [error, setError] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -1124,18 +1116,19 @@ function ItemForm({ item, existingIds, existingCategories, onSave, onDelete, onC
 
   const handleSubmit = () => {
     if (!form.name.trim()) return setError('Item name is required');
-    if (!form.id.trim()) return setError('SKU is required');
-    if (isNew && existingIds.includes(form.id.trim())) return setError('That SKU already exists');
+    if (!form.price || Number(form.price) <= 0) return setError('Sale price is required');
     setError('');
     onSave({
       ...form,
-      id: form.id.trim(),
+      isNew,
       category: (form.category || '').trim(),
       cost: Number(form.cost) || 0,
       price: Number(form.price) || 0,
       stock: Number(form.stock) || 0,
       warehouseStock: Number(form.warehouseStock) || 0,
       reorder: Number(form.reorder) || 0,
+      expiryDate: form.expiryDate || '',
+      batchNumber: form.batchNumber || '',
     });
   };
 
@@ -1144,6 +1137,7 @@ function ItemForm({ item, existingIds, existingCategories, onSave, onDelete, onC
     background: C.ink, color: C.paper, fontFamily: FONT_BODY, fontSize: 13, marginTop: 4,
   };
   const labelStyle = { fontSize: 11, color: C.paperDim, fontWeight: 600 };
+  const costNotSet = !form.cost || Number(form.cost) === 0;
 
   return (
     <div style={{
@@ -1163,16 +1157,12 @@ function ItemForm({ item, existingIds, existingCategories, onSave, onDelete, onC
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 4 }}>
           <label style={{ gridColumn: '1 / -1' }}>
-            <span style={labelStyle}>Item name</span>
-            <input style={inputStyle} value={form.name} onChange={e => set('name', e.target.value)} placeholder="e.g. Mobil 1 5W-30 Synthetic Engine Oil" />
-          </label>
-          <label>
-            <span style={labelStyle}>SKU {isNew ? '' : '(locked)'}</span>
-            <input style={inputStyle} value={form.id} disabled={!isNew} onChange={e => set('id', e.target.value)} placeholder="e.g. TB-201" />
+            <span style={labelStyle}>Item name *</span>
+            <input style={inputStyle} value={form.name} onChange={e => set('name', e.target.value)} placeholder="Product name" />
           </label>
           <label>
             <span style={labelStyle}>Brand</span>
-            <input style={inputStyle} value={form.brand} onChange={e => set('brand', e.target.value)} placeholder="e.g. Mobil" />
+            <input style={inputStyle} value={form.brand} onChange={e => set('brand', e.target.value)} placeholder="Brand name" />
           </label>
           <label>
             <span style={labelStyle}>Category</span>
@@ -1181,7 +1171,7 @@ function ItemForm({ item, existingIds, existingCategories, onSave, onDelete, onC
               list="category-suggestions"
               value={form.category || ''}
               onChange={e => set('category', e.target.value)}
-              placeholder="Type any category — e.g. Skincare, Brake Fluid"
+              placeholder="Type a category — anything you like"
             />
             <datalist id="category-suggestions">
               {existingCategories.map(c => <option key={c} value={c} />)}
@@ -1189,14 +1179,15 @@ function ItemForm({ item, existingIds, existingCategories, onSave, onDelete, onC
           </label>
           <label>
             <span style={labelStyle}>Size</span>
-            <input style={inputStyle} value={form.size} onChange={e => set('size', e.target.value)} placeholder="e.g. 4L" />
+            <input style={inputStyle} value={form.size} onChange={e => set('size', e.target.value)} placeholder="e.g. size, weight, or variant" />
           </label>
           <label>
             <span style={labelStyle}>Cost price (₦)</span>
             <input style={inputStyle} type="number" value={form.cost} onChange={e => set('cost', e.target.value)} />
+            {costNotSet && <div style={{ fontSize: 10, color: C.paperDim, marginTop: 3, fontStyle: 'italic' }}>Not set — this item won't count toward profit/margin numbers until it is</div>}
           </label>
           <label>
-            <span style={labelStyle}>Sale price (₦)</span>
+            <span style={labelStyle}>Sale price (₦) *</span>
             <input style={inputStyle} type="number" value={form.price} onChange={e => set('price', e.target.value)} />
           </label>
           <label>
@@ -1211,9 +1202,17 @@ function ItemForm({ item, existingIds, existingCategories, onSave, onDelete, onC
             <span style={labelStyle}>Reorder level</span>
             <input style={inputStyle} type="number" value={form.reorder} onChange={e => set('reorder', e.target.value)} />
           </label>
+          <label>
+            <span style={labelStyle}>Expiry date</span>
+            <input style={inputStyle} type="date" value={form.expiryDate || ''} onChange={e => set('expiryDate', e.target.value)} />
+          </label>
+          <label style={{ gridColumn: '1 / -1' }}>
+            <span style={labelStyle}>Batch / lot number</span>
+            <input style={inputStyle} value={form.batchNumber || ''} onChange={e => set('batchNumber', e.target.value)} placeholder="e.g. batch or lot code, if you track one" />
+          </label>
           <label style={{ gridColumn: '1 / -1' }}>
             <span style={labelStyle}>Origin / supplier</span>
-            <input style={inputStyle} value={form.origin} onChange={e => set('origin', e.target.value)} placeholder="e.g. Apapa Port, Lagos" />
+            <input style={inputStyle} value={form.origin} onChange={e => set('origin', e.target.value)} placeholder="Where this comes from" />
           </label>
         </div>
 
@@ -1315,7 +1314,7 @@ function SaleView({ inventory, onSubmit, sales }) {
             value={search}
             onChange={e => { setSearch(e.target.value); setItemId(null); setShowDropdown(true); }}
             onFocus={() => setShowDropdown(true)}
-            placeholder="e.g. Castrol, brake fluid, engine oil…"
+            placeholder="Search by name, brand, or category…"
             style={{
               width: '100%', padding: '11px 36px 11px 12px', borderRadius: 8,
               border: `1px solid ${item ? C.amber : C.line}`,
@@ -1544,9 +1543,18 @@ function ReportsView({ sales, inventory }) {
   const [range, setRange] = useState('today');
   const filtered = filterSalesByRange(sales, range);
   const revenue = filtered.reduce((sum, s) => sum + s.qty * s.unitPrice, 0);
-  const cost = filtered.reduce((sum, s) => sum + s.qty * s.unitCost, 0);
-  const profit = revenue - cost;
-  const margin = revenue ? (profit / revenue) * 100 : 0;
+
+  // Cost/profit/margin can only be computed for sales where we actually know
+  // the cost at time of sale. A sale with unitCost 0 means cost wasn't set on
+  // that item — including it would silently inflate profit and margin, so it's
+  // left out of these three numbers entirely rather than treated as free stock.
+  const pricedSales = filtered.filter(s => s.unitCost > 0);
+  const unpricedSales = filtered.filter(s => s.unitCost === 0);
+  const pricedRevenue = pricedSales.reduce((sum, s) => sum + s.qty * s.unitPrice, 0);
+  const cost = pricedSales.reduce((sum, s) => sum + s.qty * s.unitCost, 0);
+  const profit = pricedRevenue - cost;
+  const margin = pricedRevenue ? (profit / pricedRevenue) * 100 : 0;
+  const unpricedRevenue = unpricedSales.reduce((sum, s) => sum + s.qty * s.unitPrice, 0);
 
   const byPayment = {};
   filtered.forEach(s => { byPayment[s.payment] = (byPayment[s.payment] || 0) + s.qty * s.unitPrice; });
@@ -1599,12 +1607,18 @@ function ReportsView({ sales, inventory }) {
         ))}
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 16 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: unpricedRevenue > 0 ? 6 : 16 }}>
         <StatCard label="Revenue" value={naira(revenue)} color={C.paper} />
         <StatCard label="Cost (imported)" value={naira(cost)} color={C.paperDim} />
         <StatCard label="Profit" value={naira(profit)} color={C.teal} />
         <StatCard label="Margin" value={`${margin.toFixed(1)}%`} color={C.amber} />
       </div>
+
+      {unpricedRevenue > 0 && (
+        <div style={{ fontSize: 11, color: C.paperDim, fontStyle: 'italic', marginBottom: 16 }}>
+          {naira(unpricedRevenue)} of revenue is from items with no cost price set — left out of Cost, Profit, and Margin above. Add a cost price on those items in Inventory to include them.
+        </div>
+      )}
 
       <div style={{ fontFamily: FONT_DISPLAY, fontSize: 14, textTransform: 'uppercase', letterSpacing: '0.03em', color: C.paperDim, marginBottom: 10 }}>
         Revenue by payment method
@@ -1674,9 +1688,13 @@ function InsightsView({ sales, inventory }) {
   const revLast = lastWeek.reduce((s, x) => s + x.qty * x.unitPrice, 0);
   const pctChange = revLast > 0 ? ((revThis - revLast) / revLast) * 100 : null;
 
-  // capital tied up in stock
-  const costValue = inventory.reduce((s, i) => s + i.cost * i.stock, 0);
-  const retailValue = inventory.reduce((s, i) => s + i.price * i.stock, 0);
+  // capital tied up in stock — items with no cost set have no basis for this,
+  // so they're left out rather than treated as zero-cost (which would make
+  // their entire retail value look like pure profit)
+  const pricedInventory = inventory.filter(i => i.cost > 0);
+  const unpricedItemCount = inventory.length - pricedInventory.length;
+  const costValue = pricedInventory.reduce((s, i) => s + i.cost * i.stock, 0);
+  const retailValue = pricedInventory.reduce((s, i) => s + i.price * i.stock, 0);
   const lockedProfit = retailValue - costValue;
 
   // velocity per item over last 7 days -> days of stock left
@@ -1697,10 +1715,21 @@ function InsightsView({ sales, inventory }) {
   const soldIds = new Set(last14.map(s => s.itemId));
   const deadStock = inventory.filter(i => i.stock > 0 && !soldIds.has(i.id)).slice(0, 5);
 
-  // margin champions
-  const champions = [...inventory]
+  // margin champions — same reasoning as capital tied up: no cost, no margin to rank
+  const champions = pricedInventory
     .map(i => ({ ...i, margin: ((i.price - i.cost) / i.price) * 100 }))
     .sort((a, b) => b.margin - a.margin)
+    .slice(0, 5);
+
+  // expiring stock — only relevant to businesses that actually track expiry
+  // dates (e.g. pharma, cosmetics), so the section stays hidden otherwise
+  // rather than showing an empty box to tenants who never use this field
+  const tracksExpiry = inventory.some(i => i.expiryDate);
+  const expiringItems = inventory
+    .filter(i => i.expiryDate)
+    .map(i => ({ ...i, daysLeft: Math.ceil((new Date(i.expiryDate) - new Date()) / 86400000) }))
+    .filter(i => i.daysLeft <= 30)
+    .sort((a, b) => a.daysLeft - b.daysLeft)
     .slice(0, 5);
 
   return (
@@ -1725,6 +1754,11 @@ function InsightsView({ sales, inventory }) {
             <div style={{ fontSize: 11, color: C.paperDim }}>profit waiting to be sold</div>
           </div>
         </div>
+        {unpricedItemCount > 0 && (
+          <div style={{ fontSize: 10, color: C.paperDim, fontStyle: 'italic', marginTop: 8 }}>
+            {unpricedItemCount} item{unpricedItemCount === 1 ? '' : 's'} left out — no cost price set yet
+          </div>
+        )}
       </div>
 
       {/* Week over week */}
@@ -1760,6 +1794,23 @@ function InsightsView({ sales, inventory }) {
           />
         ))}
       </div>
+
+      {tracksExpiry && (
+        <>
+          <SectionLabel icon={Clock} color={C.amber}>Expiring soon</SectionLabel>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 16 }}>
+            {expiringItems.length === 0 && <EmptyNote>Nothing expiring in the next 30 days.</EmptyNote>}
+            {expiringItems.map(i => (
+              <InsightRow key={i.id}
+                title={i.name}
+                value={i.daysLeft < 0 ? 'Expired' : `${i.daysLeft} day${i.daysLeft === 1 ? '' : 's'} left`}
+                valueColor={i.daysLeft < 0 || i.daysLeft <= 7 ? C.red : C.amber}
+                sub={`${i.stock} in stock${i.batchNumber ? ` · batch ${i.batchNumber}` : ''}`}
+              />
+            ))}
+          </div>
+        </>
+      )}
 
       {/* Dead stock */}
       <SectionLabel icon={ArchiveX} color={C.blue}>Not moving — 14 days, zero sales</SectionLabel>
@@ -1870,7 +1921,7 @@ function WhatsAppView({ sales, inventory, lowStockItems, business, apiUrl }) {
           background: '#005C4B', color: '#E9EDEF', borderRadius: '10px 10px 2px 10px', padding: '12px 14px',
           fontFamily: FONT_BODY, fontSize: 13, lineHeight: 1.6, maxWidth: '92%', marginLeft: 'auto',
         }}>
-          <div style={{ fontWeight: 700, marginBottom: 6 }}>📋 {business?.name || 'Apex Autos'} — {dateStr}</div>
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>📋 {business?.name || 'Your Business'} — {dateStr}</div>
           <div>Revenue today: <b>{naira(revenue)}</b></div>
           {topItem && <div>Best seller: <b>{topItem.name}</b> ({agg[topId]} sold)</div>}
           <div>Low stock alerts: <b>{lowStockItems.length} item{lowStockItems.length === 1 ? '' : 's'}</b></div>
@@ -2176,8 +2227,8 @@ function NotebookView({ inventory, apiUrl, token, onRecordSales, onAddStock }) {
               value={raw}
               onChange={e => setRaw(e.target.value)}
               placeholder={mode === 'sales'
-                ? 'Paste your Google Lens text here — any format is fine. Examples:\n\nCastrol brake fluid x5\nMobil 20-50 engine oil 2pcs\nTotal gear oil x10'
-                : 'Paste your Google Lens text here — any format is fine. Examples:\n\nCastrol dot 3 x100\nMobil 5W-30 20 bottles\nShell Helix 10W-40 x50'}
+                ? 'Paste your Google Lens text here — any format is fine. Examples:\n\nProduct name x5\nAnother product 2pcs\nThird item x10'
+                : 'Paste your Google Lens text here — any format is fine. Examples:\n\nProduct name x100\nAnother product 20 bottles\nThird item x50'}
               style={{ width: '100%', minHeight: 200, padding: '12px', borderRadius: 8, border: `1px solid ${C.line}`, background: C.panel, color: C.paper, fontFamily: FONT_MONO, fontSize: 13, lineHeight: 1.6, resize: 'vertical' }}
             />
           ) : (
@@ -2326,6 +2377,40 @@ function AdminDashboard({ apiUrl, token, onLogout }) {
     }
   };
 
+  const [markingPaid, setMarkingPaid] = useState(null); // business id currently being marked
+
+  const handleMarkPaid = async (businessId) => {
+    setMarkingPaid(businessId);
+    try {
+      const res = await apiRequest(apiUrl, `/admin/businesses/${businessId}/mark-paid`, { method: 'POST', token });
+      setBusinesses(bs => bs.map(b => b.id === businessId ? { ...b, next_due_date: res.nextDueDate } : b));
+      setDetail(d => (d && d.business && selected === businessId) ? { ...d, business: { ...d.business, next_due_date: res.nextDueDate } } : d);
+    } catch (e) {
+      alert(`Could not mark as paid: ${e.message}`);
+    } finally {
+      setMarkingPaid(null);
+    }
+  };
+
+  const subscriptionStatus = (b) => {
+    const now = new Date();
+    const trialEndsAt = b.trial_ends_at ? new Date(b.trial_ends_at) : null;
+    const nextDueDate = b.next_due_date ? new Date(b.next_due_date) : null;
+    if (trialEndsAt && now < trialEndsAt) {
+      const days = Math.ceil((trialEndsAt - now) / 86400000);
+      return { label: `Trial · ${days}d left`, color: C.blue };
+    }
+    if (nextDueDate && now > nextDueDate) {
+      return { label: 'Overdue', color: C.red };
+    }
+    if (nextDueDate) {
+      const days = Math.ceil((nextDueDate - now) / 86400000);
+      if (days <= 7) return { label: `Due in ${days}d`, color: C.amber };
+      return { label: 'Active', color: C.teal };
+    }
+    return { label: '—', color: C.paperDim };
+  };
+
   const loadDetail = async (id) => {
     setSelected(id);
     setDetail(null);
@@ -2462,7 +2547,12 @@ function AdminDashboard({ apiUrl, token, onLogout }) {
                     style={{ background: selected === b.id ? C.panel2 : C.panel, border: `1px solid ${selected === b.id ? C.amber + '55' : C.line}`, borderRadius: 10, padding: '12px 14px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}
                   >
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 13, fontWeight: 700 }}>{b.name}</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <div style={{ fontSize: 13, fontWeight: 700 }}>{b.name}</div>
+                        {(() => { const st = subscriptionStatus(b); return (
+                          <span style={{ fontSize: 10, fontWeight: 700, color: st.color, border: `1px solid ${st.color}55`, background: `${st.color}1A`, borderRadius: 4, padding: '1px 6px' }}>{st.label}</span>
+                        ); })()}
+                      </div>
                       {b.address && <div style={{ fontSize: 11, color: C.paperDim, marginTop: 2 }}>{b.address}</div>}
                       <div style={{ fontSize: 11, color: C.paperDim, marginTop: 4, display: 'flex', gap: 12 }}>
                         <span>👤 {b.owner_name || '—'}</span>
@@ -2489,6 +2579,20 @@ function AdminDashboard({ apiUrl, token, onLogout }) {
                             <div style={{ fontSize: 11 }}><span style={{ color: C.paperDim }}>Phone: </span><span style={{ fontFamily: FONT_MONO }}>{detail.business.owner_phone}</span></div>
                             <div style={{ fontSize: 11 }}><span style={{ color: C.paperDim }}>Staff: </span>{detail.staff.length} account{detail.staff.length !== 1 ? 's' : ''}</div>
                             <div style={{ fontSize: 11 }}><span style={{ color: C.paperDim }}>WhatsApp: </span><span style={{ fontFamily: FONT_MONO }}>{detail.business.whatsapp_number || '—'}</span></div>
+                          </div>
+
+                          <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, padding: '10px 12px', marginBottom: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+                            <div style={{ fontSize: 11, color: C.paperDim }}>
+                              {naira(detail.business.monthly_fee || 10000)}/mo · next due{' '}
+                              <span style={{ color: C.paper, fontWeight: 600 }}>
+                                {detail.business.next_due_date ? new Date(detail.business.next_due_date).toLocaleDateString('en-NG', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}
+                              </span>
+                            </div>
+                            <button
+                              onClick={() => handleMarkPaid(b.id)}
+                              disabled={markingPaid === b.id}
+                              style={{ padding: '6px 12px', borderRadius: 6, border: 'none', background: C.teal, color: '#fff', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}
+                            >{markingPaid === b.id ? 'Marking…' : 'Mark as paid'}</button>
                           </div>
 
                           {detail.topItems.length > 0 && (
