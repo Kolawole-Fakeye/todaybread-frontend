@@ -2237,7 +2237,7 @@ function NotebookView({ inventory, apiUrl, token, onRecordSales, onAddStock }) {
                 <label style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, minHeight: 200, borderRadius: 8, border: `1px dashed ${C.line}`, background: C.panel, color: C.paperDim, cursor: 'pointer', fontSize: 13 }}>
                   <Camera size={26} style={{ opacity: 0.6 }} />
                   Tap to take or choose a photo of your ledger page
-                  <input type="file" accept="image/*" capture="environment" onChange={handlePhotoSelect} style={{ display: 'none' }} />
+                  <input type="file" accept="image/*" onChange={handlePhotoSelect} style={{ display: 'none' }} />
                 </label>
               ) : (
                 <div style={{ position: 'relative' }}>
