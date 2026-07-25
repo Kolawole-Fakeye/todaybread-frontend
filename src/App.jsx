@@ -68,6 +68,17 @@ function iconForCategory(category) {
   return CATEGORY_ICON[category] || Package;
 }
 
+// Keys must match the backend's INDUSTRY_CATEGORIES map exactly — this is
+// what determines which starter category set gets seeded at signup.
+const INDUSTRY_OPTIONS = [
+  { value: 'auto_parts', label: 'Auto Parts & Fluids' },
+  { value: 'cosmetics', label: 'Cosmetics & Personal Care' },
+  { value: 'pharmacy', label: 'Pharmacy & Healthcare' },
+  { value: 'groceries', label: 'Groceries / Provisions' },
+  { value: 'fashion', label: 'Fashion & Accessories' },
+  { value: 'other', label: 'Other / General' },
+];
+
 function naira(n) {
   return '₦' + Math.round(n).toLocaleString('en-NG');
 }
@@ -155,6 +166,7 @@ export default function TodayBread() {
   const [auth, setAuth, authLoaded] = useAuth();
   const [inventory, setInventoryLocal] = useState([]);
   const [sales, setSalesLocal] = useState([]);
+  const [categories, setCategories] = useState([]); // [{ category, item_count }] — seeded + in-use, from GET /inventory/categories
   const [pending, setPending, pendingLoaded] = useStorage('todaybread-pending-sales', []);
   const [dataLoaded, setDataLoaded] = useState(false);
   const [syncStatus, setSyncStatus] = useState('idle'); // idle | syncing | error
@@ -235,6 +247,21 @@ export default function TodayBread() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
+  // categories are fetched separately from inventory items — this is what lets
+  // pre-seeded categories show up as suggestions even before any item exists
+  const loadCategories = useCallback(async () => {
+    if (!apiUrl || !token) return;
+    try {
+      const res = await apiRequest(apiUrl, '/inventory/categories', { token });
+      setCategories(res.categories || []);
+    } catch (e) {
+      // non-critical — the category datalist just falls back to empty/item-derived
+      console.error('[categories] load failed:', e.message);
+    }
+  }, [apiUrl, token]);
+
+  useEffect(() => { loadCategories(); }, [loadCategories]);
+
   // try to flush queued offline sales whenever we have a connection
   const syncPending = useCallback(async () => {
     if (!apiUrl || !token || pending.length === 0) return;
@@ -295,6 +322,7 @@ export default function TodayBread() {
     // back to checking for a dbId in that case.
     const isNew = formItem.isNew !== undefined ? formItem.isNew : !formItem.dbId;
     try {
+      let savedLocal;
       if (isNew) {
         const res = await apiRequest(apiUrl, '/inventory', {
           method: 'POST', token, body: {
@@ -305,10 +333,11 @@ export default function TodayBread() {
           },
         });
         // SKU is generated server-side now — use it as this item's local id.
-        setInventoryLocal(inv => [...inv, {
+        savedLocal = {
           ...formItem, id: res.item.sku, dbId: res.item.id,
           expiryDate: res.item.expiry_date, batchNumber: res.item.batch_number,
-        }]);
+        };
+        setInventoryLocal(inv => [...inv, savedLocal]);
       } else {
         await apiRequest(apiUrl, `/inventory/${formItem.dbId}`, {
           method: 'PUT', token, body: {
@@ -318,10 +347,14 @@ export default function TodayBread() {
             expiryDate: formItem.expiryDate || null, batchNumber: formItem.batchNumber || null,
           },
         });
+        savedLocal = formItem;
         setInventoryLocal(inv => inv.map(i => i.id === formItem.id ? formItem : i));
       }
+      if (formItem.category) loadCategories();
+      return savedLocal;
     } catch (e) {
       alert(`Could not save: ${e.message}`);
+      return undefined;
     }
   };
 
@@ -422,7 +455,7 @@ export default function TodayBread() {
 
       <div style={{ padding: '16px', maxWidth: 720, margin: '0 auto' }}>
         {tab === 'inventory' && (
-          <InventoryView inventory={inventory} role={role} onSave={saveItem} onDelete={deleteItem} onClearAll={clearAllItems} onTogglePublic={togglePublic} onRestock={restockItem} />
+          <InventoryView inventory={inventory} categories={categories} role={role} onSave={saveItem} onDelete={deleteItem} onClearAll={clearAllItems} onTogglePublic={togglePublic} onRestock={restockItem} />
         )}
         {tab === 'sale' && (
           <SaleView inventory={inventory} onSubmit={recordSale} sales={sales} />
@@ -443,7 +476,7 @@ export default function TodayBread() {
           <StaffView apiUrl={apiUrl} token={token} />
         )}
         {tab === 'notebook' && role === 'owner' && (
-          <NotebookView inventory={inventory} apiUrl={apiUrl} token={token} onRecordSales={recordSale} onAddStock={saveItem} />
+          <NotebookView inventory={inventory} categories={categories} apiUrl={apiUrl} token={token} onRecordSales={recordSale} onAddStock={saveItem} />
         )}
       </div>
     </div>
@@ -605,7 +638,7 @@ function LoginScreen({ apiUrl, onLogin, onShowSignup }) {
 }
 
 function SignupScreen({ apiUrl, onSignup, onBackToLogin }) {
-  const [form, setForm] = useState({ businessName: '', ownerName: '', address: '', phone: '', pin: '', whatsappNumber: '', inviteCode: '' });
+  const [form, setForm] = useState({ businessName: '', ownerName: '', address: '', phone: '', pin: '', whatsappNumber: '', inviteCode: '', industry: '' });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -630,6 +663,7 @@ function SignupScreen({ apiUrl, onSignup, onBackToLogin }) {
           pin: form.pin,
           whatsappNumber: form.whatsappNumber.trim() || form.phone.trim(),
           inviteCode: form.inviteCode.trim(),
+          industry: form.industry || 'other',
         },
       });
       await onSignup({ token: data.token, user: data.user, business: data.business });
@@ -667,6 +701,13 @@ function SignupScreen({ apiUrl, onSignup, onBackToLogin }) {
 
         <label style={labelStyle}>Business name</label>
         <input style={inputStyle} value={form.businessName} onChange={e => set('businessName', e.target.value)} placeholder="e.g. Your Business Name Ltd" />
+
+        <label style={labelStyle}>What kind of business is this?</label>
+        <select style={inputStyle} value={form.industry} onChange={e => set('industry', e.target.value)}>
+          <option value="">Select an industry</option>
+          {INDUSTRY_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+        </select>
+        <div style={{ fontSize: 10, color: C.paperDim, marginTop: -8, marginBottom: 12 }}>Gives you a starter set of categories — you can add, rename, or remove any of them later.</div>
 
         <label style={labelStyle}>Shop address</label>
         <input style={inputStyle} value={form.address} onChange={e => set('address', e.target.value)} placeholder="e.g. Block C, Shop 14, Trade Fair Complex, Lagos" />
@@ -906,7 +947,7 @@ function Tag({ children, color }) {
   );
 }
 
-function InventoryView({ inventory, role, onSave, onDelete, onClearAll, onTogglePublic, onRestock }) {
+function InventoryView({ inventory, categories: allCategories, role, onSave, onDelete, onClearAll, onTogglePublic, onRestock }) {
   const [filter, setFilter] = useState('All');
   const [editingItem, setEditingItem] = useState(undefined);
   const [confirmClearAll, setConfirmClearAll] = useState(false);
@@ -914,6 +955,9 @@ function InventoryView({ inventory, role, onSave, onDelete, onClearAll, onToggle
   const [restockTarget, setRestockTarget] = useState(null); // { item }
   const [restockQty, setRestockQty] = useState(1);
   const [restocking, setRestocking] = useState(false);
+  // Filter pills stay item-derived on purpose — a seeded-but-unused category
+  // filtering to an empty list isn't useful here, unlike in the item form's
+  // autocomplete where showing it as a typing suggestion is exactly the point.
   const categories = ['All', ...new Set(inventory.map(i => i.category).filter(Boolean))];
   const items = filter === 'All' ? inventory : inventory.filter(i => i.category === filter);
 
@@ -1092,7 +1136,7 @@ function InventoryView({ inventory, role, onSave, onDelete, onClearAll, onToggle
       {editingItem !== undefined && (
         <ItemForm
           item={editingItem}
-          existingCategories={[...new Set(inventory.map(i => i.category).filter(Boolean))].sort()}
+          existingCategories={(allCategories || []).map(c => c.category).sort()}
           onSave={handleSave}
           onDelete={editingItem ? () => handleDelete(editingItem.id) : null}
           onCancel={() => setEditingItem(undefined)}
@@ -1104,10 +1148,19 @@ function InventoryView({ inventory, role, onSave, onDelete, onClearAll, onToggle
 
 function ItemForm({ item, existingCategories, onSave, onDelete, onCancel }) {
   const isNew = !item;
-  const [form, setForm] = useState(item || {
-    name: '', brand: '', category: '', size: '', origin: '',
-    cost: 0, price: '', stock: 0, warehouseStock: 0, reorder: 0,
-    expiryDate: '', batchNumber: '',
+  // Zero and "not entered yet" look identical in a number input once you
+  // start typing into it ("0" + "5" becomes "05") — so any numeric field
+  // that's currently zero is shown blank instead, with a placeholder hint.
+  const [form, setForm] = useState(() => {
+    if (!item) return { name: '', brand: '', category: '', size: '', origin: '', cost: '', price: '', stock: '', warehouseStock: '', reorder: '', expiryDate: '', batchNumber: '' };
+    return {
+      ...item,
+      cost: item.cost ? String(item.cost) : '',
+      price: item.price ? String(item.price) : '',
+      stock: item.stock ? String(item.stock) : '',
+      warehouseStock: item.warehouseStock ? String(item.warehouseStock) : '',
+      reorder: item.reorder ? String(item.reorder) : '',
+    };
   });
   const [error, setError] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -1183,24 +1236,24 @@ function ItemForm({ item, existingCategories, onSave, onDelete, onCancel }) {
           </label>
           <label>
             <span style={labelStyle}>Cost price (₦)</span>
-            <input style={inputStyle} type="number" value={form.cost} onChange={e => set('cost', e.target.value)} />
+            <input style={inputStyle} type="number" value={form.cost} onChange={e => set('cost', e.target.value)} placeholder="-" />
             {costNotSet && <div style={{ fontSize: 10, color: C.paperDim, marginTop: 3, fontStyle: 'italic' }}>Not set — this item won't count toward profit/margin numbers until it is</div>}
           </label>
           <label>
             <span style={labelStyle}>Sale price (₦) *</span>
-            <input style={inputStyle} type="number" value={form.price} onChange={e => set('price', e.target.value)} />
+            <input style={inputStyle} type="number" value={form.price} onChange={e => set('price', e.target.value)} placeholder="-" />
           </label>
           <label>
             <span style={labelStyle}>Shop floor stock</span>
-            <input style={inputStyle} type="number" value={form.stock} onChange={e => set('stock', e.target.value)} />
+            <input style={inputStyle} type="number" value={form.stock} onChange={e => set('stock', e.target.value)} placeholder="-" />
           </label>
           <label>
             <span style={labelStyle}>Warehouse stock</span>
-            <input style={inputStyle} type="number" value={form.warehouseStock ?? 0} onChange={e => set('warehouseStock', e.target.value)} />
+            <input style={inputStyle} type="number" value={form.warehouseStock} onChange={e => set('warehouseStock', e.target.value)} placeholder="-" />
           </label>
           <label>
             <span style={labelStyle}>Reorder level</span>
-            <input style={inputStyle} type="number" value={form.reorder} onChange={e => set('reorder', e.target.value)} />
+            <input style={inputStyle} type="number" value={form.reorder} onChange={e => set('reorder', e.target.value)} placeholder="-" />
           </label>
           <label>
             <span style={labelStyle}>Expiry date</span>
@@ -2094,7 +2147,7 @@ function readFileAsBase64(file) {
   });
 }
 
-function NotebookView({ inventory, apiUrl, token, onRecordSales, onAddStock }) {
+function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onAddStock }) {
   const [mode, setMode] = useState('sales'); // sales | stock
   const [inputMode, setInputMode] = useState('text'); // text | photo
   const [raw, setRaw] = useState('');
@@ -2106,6 +2159,8 @@ function NotebookView({ inventory, apiUrl, token, onRecordSales, onAddStock }) {
   const [committing, setCommitting] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState('');
+
+  const categoryNames = (categories || []).map(c => c.category).sort();
 
   const handlePhotoSelect = (e) => {
     const file = e.target.files?.[0];
@@ -2144,12 +2199,20 @@ function NotebookView({ inventory, apiUrl, token, onRecordSales, onAddStock }) {
         const matchedItem = row.matchedItem
           ? inventory.find(i => i.dbId === row.matchedItem.id) || null
           : null;
+        const match = matchedItem ? { item: matchedItem, confidence: row.matchedItem.confidence } : null;
+        // Rough per-unit price estimate for the create-new-item prefill — the
+        // page usually shows a line total, not a unit price, so divide it
+        // back out by quantity. Just a starting guess; always editable.
+        const qty = row.quantity || 1;
+        const estUnitPrice = row.amountOnPage ? Math.round(row.amountOnPage / qty) : '';
         return {
           rawLine: row.rawDescription,
-          desc: row.rawDescription,
-          overrideQty: row.quantity || 1,
-          match: matchedItem ? { item: matchedItem, confidence: row.matchedItem.confidence } : null,
-          confirmed: !!matchedItem && !row.needsReview,
+          overrideQty: qty,
+          suggestedCategory: row.suggestedCategory || '',
+          match,
+          confirmed: !!match && !row.needsReview,
+          creating: false,
+          newDraft: { name: row.rawDescription, category: row.suggestedCategory || '', price: estUnitPrice },
         };
       });
       setParsed(results);
@@ -2164,17 +2227,32 @@ function NotebookView({ inventory, apiUrl, token, onRecordSales, onAddStock }) {
   const updateQty = (idx, val) => setParsed(p => p.map((r, i) => i === idx ? { ...r, overrideQty: Math.max(1, Number(val) || 1) } : r));
   const updateMatch = (idx, itemId) => {
     const item = inventory.find(i => i.id === itemId);
-    setParsed(p => p.map((r, i) => i === idx ? { ...r, match: item ? { item, confidence: 1 } : null, confirmed: !!item } : r));
+    setParsed(p => p.map((r, i) => i === idx ? { ...r, match: item ? { item, confidence: 1 } : null, confirmed: !!item, creating: false } : r));
   };
   const toggleConfirm = (idx) => setParsed(p => p.map((r, i) => i === idx ? { ...r, confirmed: !r.confirmed } : r));
+  const startCreating = (idx) => setParsed(p => p.map((r, i) => i === idx ? { ...r, creating: true, confirmed: false } : r));
+  const cancelCreating = (idx) => setParsed(p => p.map((r, i) => i === idx ? { ...r, creating: false } : r));
+  const updateNewDraft = (idx, key, val) => setParsed(p => p.map((r, i) => i === idx ? { ...r, newDraft: { ...r.newDraft, [key]: val } } : r));
+
+  const isRowReady = (r) => r.creating
+    ? !!(r.newDraft.name && r.newDraft.name.trim() && Number(r.newDraft.price) > 0)
+    : !!(r.confirmed && r.match);
 
   const handleCommit = async () => {
-    const toCommit = parsed.filter(r => r.confirmed && r.match);
-    if (toCommit.length === 0) return setError('No confirmed matches to record');
+    const toCommit = parsed.filter(isRowReady);
+    if (toCommit.length === 0) return setError('Nothing ready to record yet');
     setCommitting(true); setError('');
     try {
       for (const row of toCommit) {
-        if (mode === 'sales') {
+        if (row.creating) {
+          // Stock Arrival only (the button is hidden in Recording Sales mode) —
+          // create the item fresh, with initial stock set to the parsed quantity.
+          await onAddStock({
+            isNew: true, name: row.newDraft.name.trim(), category: row.newDraft.category || '',
+            price: Number(row.newDraft.price) || 0, cost: 0, stock: row.overrideQty,
+            warehouseStock: 0, reorder: 0, brand: '', size: '', origin: '', expiryDate: '', batchNumber: '',
+          });
+        } else if (mode === 'sales') {
           await onRecordSales(row.match.item.id, row.overrideQty, payment);
         } else {
           await onAddStock({ ...row.match.item, stock: row.match.item.stock + row.overrideQty });
@@ -2188,7 +2266,7 @@ function NotebookView({ inventory, apiUrl, token, onRecordSales, onAddStock }) {
     }
   };
 
-  const confirmedCount = parsed?.filter(r => r.confirmed && r.match).length || 0;
+  const readyCount = parsed?.filter(isRowReady).length || 0;
 
   const inputToggleBtn = (m, label, Icon) => (
     <button
@@ -2274,33 +2352,79 @@ function NotebookView({ inventory, apiUrl, token, onRecordSales, onAddStock }) {
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
-            {parsed.map((row, idx) => (
-              <div key={idx} style={{ background: C.panel, border: `1px solid ${row.match && row.confirmed ? C.teal + '55' : !row.match ? C.red + '55' : C.line}`, borderRadius: 10, padding: '12px 14px' }}>
-                <div style={{ fontSize: 10, color: C.paperDim, fontFamily: FONT_MONO, marginBottom: 6 }}>{row.rawLine}</div>
-                {row.match ? (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 13, fontWeight: 600 }}>{row.match.item.name}</div>
-                      <div style={{ fontSize: 11, color: C.paperDim, marginTop: 2 }}>{row.match.item.brand} · {Math.round(row.match.confidence * 100)}% match</div>
+            {parsed.map((row, idx) => {
+              const borderColor = row.creating ? C.amber + '55' : (row.match && row.confirmed) ? C.teal + '55' : !row.match ? C.red + '55' : C.line;
+              return (
+                <div key={idx} style={{ background: C.panel, border: `1px solid ${borderColor}`, borderRadius: 10, padding: '12px 14px' }}>
+                  <div style={{ fontSize: 10, color: C.paperDim, fontFamily: FONT_MONO, marginBottom: 6 }}>{row.rawLine}</div>
+
+                  {row.creating ? (
+                    <div>
+                      <div style={{ fontSize: 11, color: C.amber, fontWeight: 700, marginBottom: 8 }}>+ New item</div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
+                        <input
+                          value={row.newDraft.name} onChange={e => updateNewDraft(idx, 'name', e.target.value)}
+                          placeholder="Item name" style={{ gridColumn: '1 / -1', padding: '7px 9px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_BODY, fontSize: 13 }}
+                        />
+                        <input
+                          value={row.newDraft.category} onChange={e => updateNewDraft(idx, 'category', e.target.value)}
+                          list="notebook-category-suggestions" placeholder="Category (optional)"
+                          style={{ padding: '7px 9px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_BODY, fontSize: 13 }}
+                        />
+                        <input
+                          type="number" value={row.newDraft.price} onChange={e => updateNewDraft(idx, 'price', e.target.value)}
+                          placeholder="Sale price (₦)" style={{ padding: '7px 9px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_MONO, fontSize: 13 }}
+                        />
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ fontSize: 11, color: C.paperDim }}>Initial stock:</span>
+                        <input type="number" value={row.overrideQty} min={1} onChange={e => updateQty(idx, e.target.value)} style={{ width: 52, textAlign: 'center', padding: '5px 6px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_MONO, fontSize: 14, fontWeight: 700 }} />
+                        <button onClick={() => cancelCreating(idx)} style={{ marginLeft: 'auto', padding: '5px 10px', borderRadius: 6, border: `1px solid ${C.line}`, background: 'transparent', color: C.paperDim, fontWeight: 600, fontSize: 11, cursor: 'pointer' }}>Cancel</button>
+                      </div>
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <input type="number" value={row.overrideQty} min={1} onChange={e => updateQty(idx, e.target.value)} style={{ width: 52, textAlign: 'center', padding: '5px 6px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_MONO, fontSize: 14, fontWeight: 700 }} />
-                      <button onClick={() => toggleConfirm(idx)} style={{ padding: '5px 10px', borderRadius: 6, border: 'none', background: row.confirmed ? C.teal : C.line, color: row.confirmed ? '#fff' : C.paperDim, fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>{row.confirmed ? '✓' : 'Skip'}</button>
-                    </div>
-                  </div>
-                ) : (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                    <AlertTriangle size={13} color={C.red} />
-                    <span style={{ fontSize: 12, color: C.red }}>No match — pick manually:</span>
-                    <select onChange={e => updateMatch(idx, e.target.value)} style={{ flex: 1, minWidth: 160, padding: '5px 8px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontSize: 12 }}>
-                      <option value="">— pick an item —</option>
-                      {inventory.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
-                    </select>
-                  </div>
-                )}
-              </div>
-            ))}
+                  ) : (
+                    <>
+                      {row.match ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: 13, fontWeight: 600 }}>{row.match.item.name}</div>
+                            <div style={{ fontSize: 11, color: C.paperDim, marginTop: 2 }}>{row.match.item.brand} · {Math.round(row.match.confidence * 100)}% match</div>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <input type="number" value={row.overrideQty} min={1} onChange={e => updateQty(idx, e.target.value)} style={{ width: 52, textAlign: 'center', padding: '5px 6px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_MONO, fontSize: 14, fontWeight: 700 }} />
+                            <button onClick={() => toggleConfirm(idx)} style={{ padding: '5px 10px', borderRadius: 6, border: 'none', background: row.confirmed ? C.teal : C.line, color: row.confirmed ? '#fff' : C.paperDim, fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>{row.confirmed ? '✓' : 'Skip'}</button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                          <AlertTriangle size={13} color={C.red} />
+                          <span style={{ fontSize: 12, color: C.red }}>No match found</span>
+                        </div>
+                      )}
+
+                      <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${C.line}`, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: 11, color: C.paperDim }}>{row.match ? 'Not this?' : 'Or:'}</span>
+                        <select onChange={e => updateMatch(idx, e.target.value)} value={row.match && !row.creating ? row.match.item.id : ''} style={{ flex: 1, minWidth: 140, padding: '5px 8px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontSize: 12 }}>
+                          <option value="">— pick an existing item —</option>
+                          {inventory.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
+                        </select>
+                        {mode === 'stock' && (
+                          <button onClick={() => startCreating(idx)} style={{ padding: '5px 10px', borderRadius: 6, border: `1px dashed ${C.amber}66`, background: `${C.amber}14`, color: C.amber, fontWeight: 700, fontSize: 11, cursor: 'pointer', whiteSpace: 'nowrap' }}>+ Create as new item</button>
+                        )}
+                      </div>
+                      {mode === 'sales' && !row.match && (
+                        <div style={{ fontSize: 10, color: C.paperDim, fontStyle: 'italic', marginTop: 6 }}>Not in your inventory yet — add it via Stock Arrival first.</div>
+                      )}
+                    </>
+                  )}
+                </div>
+              );
+            })}
           </div>
+
+          <datalist id="notebook-category-suggestions">
+            {categoryNames.map(c => <option key={c} value={c} />)}
+          </datalist>
 
           {mode === 'sales' && (
             <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
@@ -2312,8 +2436,8 @@ function NotebookView({ inventory, apiUrl, token, onRecordSales, onAddStock }) {
 
           {error && <div style={{ color: C.red, fontSize: 12, marginBottom: 10 }}>{error}</div>}
 
-          <button onClick={handleCommit} disabled={committing || confirmedCount === 0} style={{ width: '100%', padding: '13px 0', borderRadius: 8, border: 'none', background: confirmedCount > 0 ? C.amber : C.line, color: confirmedCount > 0 ? C.ink : C.paperDim, fontFamily: FONT_BODY, fontWeight: 700, fontSize: 14, cursor: confirmedCount > 0 ? 'pointer' : 'default' }}>
-            {committing ? 'Recording…' : `Record ${confirmedCount} confirmed entr${confirmedCount === 1 ? 'y' : 'ies'}`}
+          <button onClick={handleCommit} disabled={committing || readyCount === 0} style={{ width: '100%', padding: '13px 0', borderRadius: 8, border: 'none', background: readyCount > 0 ? C.amber : C.line, color: readyCount > 0 ? C.ink : C.paperDim, fontFamily: FONT_BODY, fontWeight: 700, fontSize: 14, cursor: readyCount > 0 ? 'pointer' : 'default' }}>
+            {committing ? 'Recording…' : `Record ${readyCount} confirmed entr${readyCount === 1 ? 'y' : 'ies'}`}
           </button>
         </>
       )}
