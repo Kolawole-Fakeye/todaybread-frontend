@@ -74,6 +74,7 @@ const INDUSTRY_OPTIONS = [
   { value: 'auto_parts', label: 'Auto Parts & Fluids' },
   { value: 'cosmetics', label: 'Cosmetics & Personal Care' },
   { value: 'pharmacy', label: 'Pharmacy & Healthcare' },
+  { value: 'electronics', label: 'IT, Electronics & Phone Accessories' },
   { value: 'groceries', label: 'Groceries / Provisions' },
   { value: 'fashion', label: 'Fashion & Accessories' },
   { value: 'other', label: 'Other / General' },
@@ -555,9 +556,13 @@ function LoginScreen({ apiUrl, onLogin, onShowSignup }) {
     setLoading(true); setError('');
     try {
       const data = await apiRequest(apiUrl, '/auth/login', { method: 'POST', body: { phone, pin } });
-      const me = await apiRequest(apiUrl, '/me', { token: data.token }).catch(() => null);
+      // No .catch(() => null) here on purpose — if this fails, the person
+      // would otherwise get dropped into the app under a fake "TodayBread"
+      // placeholder business with a broken catalogue link and no real data.
+      // Better to show a clear error and let them retry.
+      const me = await apiRequest(apiUrl, '/me', { token: data.token });
       const adminCheck = await apiRequest(apiUrl, '/admin/check', { token: data.token }).catch(() => ({ isSuperAdmin: false }));
-      await onLogin({ token: data.token, user: { ...data.user, isSuperAdmin: adminCheck.isSuperAdmin }, business: me?.business || { name: 'TodayBread' } });
+      await onLogin({ token: data.token, user: { ...data.user, isSuperAdmin: adminCheck.isSuperAdmin }, business: me.business });
     } catch (e) {
       setError(e.message || 'Login failed');
     } finally {
