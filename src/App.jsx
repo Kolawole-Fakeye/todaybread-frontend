@@ -168,6 +168,7 @@ export default function TodayBread() {
   const [inventory, setInventoryLocal] = useState([]);
   const [sales, setSalesLocal] = useState([]);
   const [categories, setCategories] = useState([]); // [{ category, item_count }] — seeded + in-use, from GET /inventory/categories
+  const [brands, setBrands] = useState([]); // [{ brand, item_count }] — same idea, for the Brand field's autocomplete
   const [pending, setPending, pendingLoaded] = useStorage('todaybread-pending-sales', []);
   const [dataLoaded, setDataLoaded] = useState(false);
   const [syncStatus, setSyncStatus] = useState('idle'); // idle | syncing | error
@@ -263,6 +264,18 @@ export default function TodayBread() {
 
   useEffect(() => { loadCategories(); }, [loadCategories]);
 
+  const loadBrands = useCallback(async () => {
+    if (!apiUrl || !token) return;
+    try {
+      const res = await apiRequest(apiUrl, '/inventory/brands', { token });
+      setBrands(res.brands || []);
+    } catch (e) {
+      console.error('[brands] load failed:', e.message);
+    }
+  }, [apiUrl, token]);
+
+  useEffect(() => { loadBrands(); }, [loadBrands]);
+
   // try to flush queued offline sales whenever we have a connection
   const syncPending = useCallback(async () => {
     if (!apiUrl || !token || pending.length === 0) return;
@@ -352,6 +365,7 @@ export default function TodayBread() {
         setInventoryLocal(inv => inv.map(i => i.id === formItem.id ? formItem : i));
       }
       if (formItem.category) loadCategories();
+      if (formItem.brand) loadBrands();
       return savedLocal;
     } catch (e) {
       alert(`Could not save: ${e.message}`);
@@ -456,7 +470,7 @@ export default function TodayBread() {
 
       <div style={{ padding: '16px', maxWidth: 720, margin: '0 auto' }}>
         {tab === 'inventory' && (
-          <InventoryView inventory={inventory} categories={categories} role={role} onSave={saveItem} onDelete={deleteItem} onClearAll={clearAllItems} onTogglePublic={togglePublic} onRestock={restockItem} />
+          <InventoryView inventory={inventory} categories={categories} brands={brands} role={role} onSave={saveItem} onDelete={deleteItem} onClearAll={clearAllItems} onTogglePublic={togglePublic} onRestock={restockItem} />
         )}
         {tab === 'sale' && (
           <SaleView inventory={inventory} onSubmit={recordSale} sales={sales} />
@@ -952,7 +966,7 @@ function Tag({ children, color }) {
   );
 }
 
-function InventoryView({ inventory, categories: allCategories, role, onSave, onDelete, onClearAll, onTogglePublic, onRestock }) {
+function InventoryView({ inventory, categories: allCategories, brands: allBrands, role, onSave, onDelete, onClearAll, onTogglePublic, onRestock }) {
   const [filter, setFilter] = useState('All');
   const [editingItem, setEditingItem] = useState(undefined);
   const [confirmClearAll, setConfirmClearAll] = useState(false);
@@ -1142,6 +1156,7 @@ function InventoryView({ inventory, categories: allCategories, role, onSave, onD
         <ItemForm
           item={editingItem}
           existingCategories={(allCategories || []).map(c => c.category).sort()}
+          existingBrands={(allBrands || []).map(b => b.brand).sort()}
           onSave={handleSave}
           onDelete={editingItem ? () => handleDelete(editingItem.id) : null}
           onCancel={() => setEditingItem(undefined)}
@@ -1151,7 +1166,7 @@ function InventoryView({ inventory, categories: allCategories, role, onSave, onD
   );
 }
 
-function ItemForm({ item, existingCategories, onSave, onDelete, onCancel }) {
+function ItemForm({ item, existingCategories, existingBrands, onSave, onDelete, onCancel }) {
   const isNew = !item;
   // Zero and "not entered yet" look identical in a number input once you
   // start typing into it ("0" + "5" becomes "05") — so any numeric field
@@ -1220,7 +1235,10 @@ function ItemForm({ item, existingCategories, onSave, onDelete, onCancel }) {
           </label>
           <label>
             <span style={labelStyle}>Brand</span>
-            <input style={inputStyle} value={form.brand} onChange={e => set('brand', e.target.value)} placeholder="Brand name" />
+            <input style={inputStyle} list="brand-suggestions" value={form.brand} onChange={e => set('brand', e.target.value)} placeholder="Brand name" />
+            <datalist id="brand-suggestions">
+              {(existingBrands || []).map(b => <option key={b} value={b} />)}
+            </datalist>
           </label>
           <label>
             <span style={labelStyle}>Category</span>
