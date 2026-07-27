@@ -158,7 +158,11 @@ async function apiRequest(apiUrl, path, { method = 'GET', token, body } = {}) {
     body: body ? JSON.stringify(body) : undefined,
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  if (!res.ok) {
+    const err = new Error(data.error || `Request failed (${res.status})`);
+    err.debug = data.debug; // present on some endpoints (e.g. OCR parsing) — the real underlying reason
+    throw err;
+  }
   return data;
 }
 
@@ -2209,9 +2213,9 @@ function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onA
       let body;
       if (inputMode === 'photo') {
         const imageBase64 = await readFileAsBase64(photoFile);
-        body = { imageBase64, mediaType: photoFile.type || 'image/jpeg' };
+        body = { imageBase64, mediaType: photoFile.type || 'image/jpeg', mode };
       } else {
-        body = { text: raw };
+        body = { text: raw, mode };
       }
 
       const data = await apiRequest(apiUrl, '/ocr/parse-page', { method: 'POST', token, body });
@@ -2241,7 +2245,7 @@ function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onA
       setParsed(results);
       setDone(false);
     } catch (e) {
-      setError(e.message || 'Could not parse the ledger entry');
+      setError((e.message || 'Could not parse the ledger entry') + (e.debug ? ` — details: ${e.debug}` : ''));
     } finally {
       setParsing(false);
     }
