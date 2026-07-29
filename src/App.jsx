@@ -241,6 +241,7 @@ export default function TodayBread() {
       const mappedSales = salesRes.sales.map(s => ({
         id: s.id, itemId: s.item_id, itemName: s.item_name, qty: s.qty,
         unitPrice: Number(s.unit_price), unitCost: Number(s.unit_cost || 0), payment: s.payment_method, timestamp: s.occurred_at,
+        voided: !!s.voided_at,
       }));
       setInventoryLocal(mappedInventory);
       setSalesLocal(mappedSales);
@@ -326,10 +327,27 @@ export default function TodayBread() {
     setSalesLocal(s => [{ id: clientUuid, itemId: item.id, itemName: item.name, qty, unitPrice: item.price, unitCost: item.cost, payment, timestamp: occurredAt }, ...s]);
 
     try {
-      await apiRequest(apiUrl, '/sales', { method: 'POST', token, body: { itemId: item.dbId, qty, paymentMethod: payment, clientUuid } });
+      const result = await apiRequest(apiUrl, '/sales', { method: 'POST', token, body: { itemId: item.dbId, qty, paymentMethod: payment, clientUuid } });
+      // Correct the optimistic entry's id to the real backend id — voiding
+      // a sale later needs the actual database id, not the client UUID.
+      if (result?.sale?.id) {
+        setSalesLocal(s => s.map(x => x.id === clientUuid ? { ...x, id: result.sale.id } : x));
+      }
     } catch (e) {
       // offline or server unreachable — queue it, it'll sync automatically later
       setPending(p => [...p, { itemId: item.dbId, qty, paymentMethod: payment, clientUuid, occurredAt }]);
+    }
+  };
+
+  // Reverses a mistaken sale — restores stock, marks it voided (never
+  // deleted, stays visible crossed out in the log). Owner only.
+  const voidSale = async (saleId) => {
+    try {
+      await apiRequest(apiUrl, `/sales/${saleId}/void`, { method: 'POST', token });
+      setSalesLocal(s => s.map(x => x.id === saleId ? { ...x, voided: true } : x));
+      await loadData(); // authoritative refresh — restored stock comes from here, not a hand-patched guess
+    } catch (e) {
+      alert(`Could not void sale: ${e.message}`);
     }
   };
 
@@ -426,6 +444,28 @@ export default function TodayBread() {
     }
   };
 
+  // A real delivery arriving (as opposed to restockItem above, which just
+  // moves stock already owned between warehouse and shop floor). Cost gets
+  // recalculated as a weighted average server-side if unitCost is given and
+  // differs from the current cost; expiry/batch only fill in if currently
+  // empty on that item.
+  const receiveStock = async (item, qty, unitCost, expiryDate, batchNumber) => {
+    try {
+      const res = await apiRequest(apiUrl, `/inventory/${item.dbId}/receive-stock`, {
+        method: 'PATCH', token, body: { qty, unitCost: unitCost || null, expiryDate: expiryDate || null, batchNumber: batchNumber || null },
+      });
+      const updated = {
+        ...item, stock: res.item.stock, cost: Number(res.item.cost_price),
+        expiryDate: res.item.expiry_date || '', batchNumber: res.item.batch_number || '',
+      };
+      setInventoryLocal(inv => inv.map(i => i.id === item.id ? updated : i));
+      return updated;
+    } catch (e) {
+      alert(`Could not receive stock: ${e.message}`);
+      return undefined;
+    }
+  };
+
   const handleLogout = () => setAuth(null);
   const [authMode, setAuthMode] = useState('login');
 
@@ -474,10 +514,10 @@ export default function TodayBread() {
 
       <div style={{ padding: '16px', maxWidth: 720, margin: '0 auto' }}>
         {tab === 'inventory' && (
-          <InventoryView inventory={inventory} categories={categories} brands={brands} role={role} onSave={saveItem} onDelete={deleteItem} onClearAll={clearAllItems} onTogglePublic={togglePublic} onRestock={restockItem} />
+          <InventoryView inventory={inventory} categories={categories} brands={brands} role={role} onSave={saveItem} onDelete={deleteItem} onClearAll={clearAllItems} onTogglePublic={togglePublic} onRestock={restockItem} apiUrl={apiUrl} token={token} loadCategories={loadCategories} loadBrands={loadBrands} loadData={loadData} />
         )}
         {tab === 'sale' && (
-          <SaleView inventory={inventory} onSubmit={recordSale} sales={sales} />
+          <SaleView inventory={inventory} onSubmit={recordSale} sales={sales} role={role} onVoid={voidSale} />
         )}
         {tab === 'analytics' && (
           <AnalyticsView sales={sales} role={role} />
@@ -486,7 +526,7 @@ export default function TodayBread() {
           <InsightsView sales={sales} inventory={inventory} />
         )}
         {tab === 'reports' && role === 'owner' && (
-          <ReportsView sales={sales} inventory={inventory} />
+          <ReportsView sales={sales} inventory={inventory} onVoid={voidSale} apiUrl={apiUrl} token={token} />
         )}
         {tab === 'whatsapp' && role === 'owner' && (
           <WhatsAppView sales={sales} inventory={inventory} lowStockItems={lowStockItems} business={auth.business} apiUrl={apiUrl} />
@@ -495,7 +535,7 @@ export default function TodayBread() {
           <StaffView apiUrl={apiUrl} token={token} />
         )}
         {tab === 'notebook' && role === 'owner' && (
-          <NotebookView inventory={inventory} categories={categories} apiUrl={apiUrl} token={token} onRecordSales={recordSale} onAddStock={saveItem} />
+          <NotebookView inventory={inventory} categories={categories} apiUrl={apiUrl} token={token} onRecordSales={recordSale} onAddStock={saveItem} onReceiveStock={receiveStock} />
         )}
       </div>
     </div>
@@ -970,7 +1010,97 @@ function Tag({ children, color }) {
   );
 }
 
-function InventoryView({ inventory, categories: allCategories, brands: allBrands, role, onSave, onDelete, onClearAll, onTogglePublic, onRestock }) {
+function ManageTaxonomyModal({ apiUrl, token, categories, brands, onClose, onChanged }) {
+  const [tab, setTab] = useState('categories');
+  const [renaming, setRenaming] = useState(null); // { type, name }
+  const [renameValue, setRenameValue] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const list = tab === 'categories' ? categories : brands;
+  const nameKey = tab === 'categories' ? 'category' : 'brand';
+  const basePath = tab === 'categories' ? '/inventory/categories' : '/inventory/brands';
+
+  const startRename = (name) => { setRenaming({ name }); setRenameValue(name); setError(''); };
+
+  const submitRename = async () => {
+    if (!renameValue.trim() || renameValue.trim() === renaming.name) { setRenaming(null); return; }
+    setBusy(true); setError('');
+    try {
+      await apiRequest(apiUrl, `${basePath}/rename`, { method: 'PATCH', token, body: { from: renaming.name, to: renameValue.trim() } });
+      setRenaming(null);
+      onChanged();
+    } catch (e) {
+      setError(e.message || 'Could not rename');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDelete = async (name) => {
+    if (!window.confirm(`Delete "${name}"? Items using it will become un${tab === 'categories' ? 'categorized' : 'branded'}, not deleted.`)) return;
+    setBusy(true); setError('');
+    try {
+      await apiRequest(apiUrl, `${basePath}/${encodeURIComponent(name)}`, { method: 'DELETE', token });
+      onChanged();
+    } catch (e) {
+      setError(e.message || 'Could not delete');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 50, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }} onClick={onClose}>
+      <div style={{ background: C.panel, borderTop: `1px solid ${C.line}`, borderRadius: '16px 16px 0 0', padding: 18, width: '100%', maxWidth: 720, maxHeight: '80vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
+        <div style={{ fontFamily: FONT_DISPLAY, fontSize: 16, textTransform: 'uppercase', letterSpacing: '0.02em', marginBottom: 14 }}>Manage categories & brands</div>
+
+        <div style={{ display: 'flex', background: C.ink, borderRadius: 8, border: `1px solid ${C.line}`, padding: 3, marginBottom: 14, width: 'fit-content' }}>
+          {[['categories', 'Categories'], ['brands', 'Brands']].map(([t, label]) => (
+            <button key={t} onClick={() => { setTab(t); setRenaming(null); setError(''); }} style={{ padding: '7px 16px', borderRadius: 6, border: 'none', cursor: 'pointer', background: tab === t ? C.amber : 'transparent', color: tab === t ? C.ink : C.paperDim, fontFamily: FONT_BODY, fontWeight: 600, fontSize: 12 }}>{label}</button>
+          ))}
+        </div>
+
+        {error && <div style={{ color: C.red, fontSize: 12, marginBottom: 10 }}>{error}</div>}
+
+        {list.length === 0 && <div style={{ color: C.paperDim, fontSize: 13, fontStyle: 'italic' }}>None yet.</div>}
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {list.map(row => {
+            const name = row[nameKey];
+            const isRenaming = renaming?.name === name;
+            return (
+              <div key={name} style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 8, padding: '10px 12px' }}>
+                {isRenaming ? (
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                    <input value={renameValue} onChange={e => setRenameValue(e.target.value)} style={{ flex: 1, padding: '6px 8px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontSize: 13 }} autoFocus />
+                    <button onClick={submitRename} disabled={busy} style={{ padding: '6px 10px', borderRadius: 6, border: 'none', background: C.teal, color: '#fff', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>Save</button>
+                    <button onClick={() => setRenaming(null)} style={{ padding: '6px 10px', borderRadius: 6, border: `1px solid ${C.line}`, background: 'transparent', color: C.paperDim, fontSize: 12, cursor: 'pointer' }}>Cancel</button>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 600 }}>{name}</div>
+                      <div style={{ fontSize: 10, color: C.paperDim, marginTop: 2 }}>{row.item_count} item{row.item_count === 1 ? '' : 's'}</div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                      <button onClick={() => startRename(name)} style={{ padding: '5px 10px', borderRadius: 6, border: `1px solid ${C.line}`, background: 'transparent', color: C.paperDim, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>Rename</button>
+                      <button onClick={() => handleDelete(name)} disabled={busy} style={{ padding: '5px 10px', borderRadius: 6, border: `1px solid ${C.red}44`, background: 'transparent', color: C.red, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>Delete</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        <button onClick={onClose} style={{ width: '100%', marginTop: 16, padding: '11px 0', borderRadius: 8, border: `1px solid ${C.line}`, background: 'transparent', color: C.paperDim, fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>Done</button>
+      </div>
+    </div>
+  );
+}
+
+function InventoryView({ inventory, categories: allCategories, brands: allBrands, role, onSave, onDelete, onClearAll, onTogglePublic, onRestock, apiUrl, token, loadCategories, loadBrands, loadData }) {
   const [filter, setFilter] = useState('All');
   const [editingItem, setEditingItem] = useState(undefined);
   const [confirmClearAll, setConfirmClearAll] = useState(false);
@@ -978,6 +1108,7 @@ function InventoryView({ inventory, categories: allCategories, brands: allBrands
   const [restockTarget, setRestockTarget] = useState(null); // { item }
   const [restockQty, setRestockQty] = useState(1);
   const [restocking, setRestocking] = useState(false);
+  const [managingTaxonomy, setManagingTaxonomy] = useState(false);
   // Filter pills stay item-derived on purpose — a seeded-but-unused category
   // filtering to an empty list isn't useful here, unlike in the item form's
   // autocomplete where showing it as a typing suggestion is exactly the point.
@@ -1015,6 +1146,10 @@ function InventoryView({ inventory, categories: allCategories, brands: allBrands
           >
             <Plus size={15} /> Add item
           </button>
+          <button
+            onClick={() => setManagingTaxonomy(true)}
+            style={{ padding: '11px 14px', borderRadius: 8, border: `1px solid ${C.line}`, background: 'transparent', color: C.paperDim, fontFamily: FONT_BODY, fontWeight: 600, fontSize: 12, cursor: 'pointer', flexShrink: 0 }}
+          >Categories</button>
           {inventory.length > 0 && (
             <button
               onClick={() => setConfirmClearAll(true)}
@@ -1022,6 +1157,15 @@ function InventoryView({ inventory, categories: allCategories, brands: allBrands
             >Clear all</button>
           )}
         </div>
+      )}
+
+      {managingTaxonomy && (
+        <ManageTaxonomyModal
+          apiUrl={apiUrl} token={token}
+          categories={allCategories || []} brands={allBrands || []}
+          onClose={() => setManagingTaxonomy(false)}
+          onChanged={() => { loadCategories(); loadBrands(); loadData(); }}
+        />
       )}
 
       {confirmClearAll && (
@@ -1329,7 +1473,7 @@ function ItemForm({ item, existingCategories, existingBrands, onSave, onDelete, 
   );
 }
 
-function SaleView({ inventory, onSubmit, sales }) {
+function SaleView({ inventory, onSubmit, sales, role, onVoid }) {
   const [search, setSearch] = useState('');
   const [itemId, setItemId] = useState(null);
   const [qty, setQty] = useState(1);
@@ -1519,18 +1663,25 @@ function SaleView({ inventory, onSubmit, sales }) {
                 const time = new Date(sale.timestamp).toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit', hour12: true });
                 const payColor = sale.payment === 'Cash' ? C.teal : sale.payment === 'Transfer' ? C.blue : C.amber;
                 return (
-                  <div key={sale.id} style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, padding: '10px 12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                  <div key={sale.id} style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, padding: '10px 12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, opacity: sale.voided ? 0.5 : 1 }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 12.5, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{sale.itemName}</div>
+                      <div style={{ fontSize: 12.5, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textDecoration: sale.voided ? 'line-through' : 'none' }}>{sale.itemName}</div>
                       <div style={{ fontSize: 11, color: C.paperDim, marginTop: 2, display: 'flex', alignItems: 'center', gap: 8 }}>
                         <span>Qty: {sale.qty}</span>
                         <span style={{ color: payColor, fontWeight: 600 }}>{sale.payment}</span>
                         <span>{time}</span>
+                        {sale.voided && <span style={{ color: C.red, fontWeight: 700 }}>VOIDED</span>}
                       </div>
                     </div>
-                    <div style={{ fontFamily: FONT_MONO, fontSize: 13, fontWeight: 700, color: C.amber, flexShrink: 0 }}>
+                    <div style={{ fontFamily: FONT_MONO, fontSize: 13, fontWeight: 700, color: C.amber, flexShrink: 0, textDecoration: sale.voided ? 'line-through' : 'none' }}>
                       {naira(sale.qty * sale.unitPrice)}
                     </div>
+                    {role === 'owner' && !sale.voided && onVoid && (
+                      <button
+                        onClick={() => { if (window.confirm(`Void this sale of ${sale.qty} × ${sale.itemName}? Stock will be restored.`)) onVoid(sale.id); }}
+                        style={{ flexShrink: 0, padding: '4px 8px', borderRadius: 5, border: `1px solid ${C.red}44`, background: 'transparent', color: C.red, fontSize: 10, fontWeight: 700, cursor: 'pointer' }}
+                      >Void</button>
+                    )}
                   </div>
                 );
               })}
@@ -1561,7 +1712,7 @@ function AnalyticsView({ sales, role }) {
   const [range, setRange] = useState('7d');
   const [metric, setMetric] = useState('qty');
 
-  const filtered = filterSalesByRange(sales, range);
+  const filtered = filterSalesByRange(sales.filter(s => !s.voided), range);
   const agg = {};
   filtered.forEach(s => {
     if (!agg[s.itemId]) agg[s.itemId] = { name: s.itemName, qty: 0, revenue: 0 };
@@ -1619,9 +1770,10 @@ function chipStyle(active, color = C.amber) {
   };
 }
 
-function ReportsView({ sales, inventory }) {
+function ReportsView({ sales, inventory, onVoid, apiUrl, token }) {
   const [range, setRange] = useState('today');
-  const filtered = filterSalesByRange(sales, range);
+  const filteredAll = filterSalesByRange(sales, range); // includes voided — only the log display uses this
+  const filtered = filteredAll.filter(s => !s.voided); // everything else (money math) uses this
   const revenue = filtered.reduce((sum, s) => sum + s.qty * s.unitPrice, 0);
 
   // Cost/profit/margin can only be computed for sales where we actually know
@@ -1640,7 +1792,7 @@ function ReportsView({ sales, inventory }) {
   filtered.forEach(s => { byPayment[s.payment] = (byPayment[s.payment] || 0) + s.qty * s.unitPrice; });
 
   // "Today's inflow vs stock balance" — the daily headline the boss checks first
-  const todaySales = filterSalesByRange(sales, 'today');
+  const todaySales = filterSalesByRange(sales, 'today').filter(s => !s.voided);
   const todayInflow = todaySales.reduce((sum, s) => sum + s.qty * s.unitPrice, 0);
   const totalUnitsInStock = inventory.reduce((sum, i) => sum + i.stock, 0);
   const stockValueAtCost = inventory.reduce((sum, i) => sum + i.cost * i.stock, 0);
@@ -1715,7 +1867,7 @@ function ReportsView({ sales, inventory }) {
 
       <div style={{ fontSize: 11, color: C.paperDim, marginTop: 16, marginBottom: 12 }}>{filtered.length} transactions in this period</div>
 
-      {filtered.length === 0 && (
+      {filteredAll.length === 0 && (
         <div style={{ textAlign: 'center', padding: '30px 16px', color: C.paperDim, background: C.panel, borderRadius: 10, border: `1px solid ${C.line}` }}>
           <ShoppingCart size={24} style={{ marginBottom: 10, opacity: 0.4 }} />
           <div style={{ fontSize: 13, fontWeight: 600, color: C.paper, marginBottom: 4 }}>No sales recorded yet</div>
@@ -1723,46 +1875,107 @@ function ReportsView({ sales, inventory }) {
         </div>
       )}
 
-      {filtered.length > 0 && (
+      {filteredAll.length > 0 && (
         <>
           <div style={{ fontFamily: FONT_DISPLAY, fontSize: 14, textTransform: 'uppercase', letterSpacing: '0.03em', color: C.paperDim, marginBottom: 10 }}>
             Sales log
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {[...filtered].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)).map(sale => {
+            {[...filteredAll].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)).map(sale => {
               const time = new Date(sale.timestamp).toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit', hour12: true });
               const payColor = sale.payment === 'Cash' ? C.teal : sale.payment === 'Transfer' ? C.blue : C.amber;
               return (
-                <div key={sale.id} style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, padding: '10px 12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                <div key={sale.id} style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, padding: '10px 12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, opacity: sale.voided ? 0.5 : 1 }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{sale.itemName}</div>
+                    <div style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textDecoration: sale.voided ? 'line-through' : 'none' }}>{sale.itemName}</div>
                     <div style={{ fontSize: 11, color: C.paperDim, marginTop: 2, display: 'flex', alignItems: 'center', gap: 8 }}>
                       <span>Qty: {sale.qty}</span>
                       <span style={{ color: payColor, fontWeight: 600 }}>{sale.payment}</span>
                       <span>{time}</span>
+                      {sale.voided && <span style={{ color: C.red, fontWeight: 700 }}>VOIDED</span>}
                     </div>
                   </div>
-                  <div style={{ fontFamily: FONT_MONO, fontSize: 13, fontWeight: 700, color: C.amber, flexShrink: 0 }}>
+                  <div style={{ fontFamily: FONT_MONO, fontSize: 13, fontWeight: 700, color: C.amber, flexShrink: 0, textDecoration: sale.voided ? 'line-through' : 'none' }}>
                     {naira(sale.qty * sale.unitPrice)}
                   </div>
+                  {!sale.voided && onVoid && (
+                    <button
+                      onClick={() => { if (window.confirm(`Void this sale of ${sale.qty} × ${sale.itemName}? Stock will be restored.`)) onVoid(sale.id); }}
+                      style={{ flexShrink: 0, padding: '4px 8px', borderRadius: 5, border: `1px solid ${C.red}44`, background: 'transparent', color: C.red, fontSize: 10, fontWeight: 700, cursor: 'pointer' }}
+                    >Void</button>
+                  )}
                 </div>
               );
             })}
           </div>
         </>
       )}
+
+      <ActivityLog apiUrl={apiUrl} token={token} />
+    </div>
+  );
+}
+
+function ActivityLog({ apiUrl, token }) {
+  const [open, setOpen] = useState(false);
+  const [entries, setEntries] = useState(null);
+  const [error, setError] = useState('');
+
+  const load = async () => {
+    if (entries !== null) return; // already loaded once, don't refetch every toggle
+    try {
+      const res = await apiRequest(apiUrl, '/audit-log', { token });
+      setEntries(res.entries || []);
+    } catch (e) {
+      setError(e.message || 'Could not load activity log');
+    }
+  };
+
+  const actionLabel = {
+    item_price_changed: '💰', item_deleted: '🗑️', sale_voided: '↩️',
+    category_deleted: '🏷️', brand_deleted: '🏷️',
+  };
+
+  return (
+    <div style={{ marginTop: 24 }}>
+      <button
+        onClick={() => { setOpen(o => !o); load(); }}
+        style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', color: C.paperDim, fontFamily: FONT_DISPLAY, fontSize: 13, textTransform: 'uppercase', letterSpacing: '0.03em', cursor: 'pointer', padding: 0 }}
+      >
+        {open ? '▾' : '▸'} Recent activity
+      </button>
+      {open && (
+        <div style={{ marginTop: 10 }}>
+          {error && <div style={{ color: C.red, fontSize: 12 }}>{error}</div>}
+          {entries === null && !error && <div style={{ color: C.paperDim, fontSize: 12 }}>Loading…</div>}
+          {entries?.length === 0 && <div style={{ color: C.paperDim, fontSize: 12, fontStyle: 'italic' }}>No price changes, deletions, or voided sales yet.</div>}
+          {entries?.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {entries.map(e => (
+                <div key={e.id} style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, padding: '8px 10px', fontSize: 11 }}>
+                  <div style={{ color: C.paper }}>{actionLabel[e.action] || '•'} {e.details}</div>
+                  <div style={{ color: C.paperDim, marginTop: 2 }}>
+                    {e.user_name || 'Unknown'} · {new Date(e.created_at).toLocaleString('en-NG', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
 function InsightsView({ sales, inventory }) {
+  const activeSales = sales.filter(s => !s.voided);
   const now = new Date();
   const sevenAgo = new Date(now); sevenAgo.setDate(sevenAgo.getDate() - 7);
   const fourteenAgo = new Date(now); fourteenAgo.setDate(fourteenAgo.getDate() - 14);
 
-  const thisWeek = sales.filter(s => new Date(s.timestamp) >= sevenAgo);
-  const lastWeek = sales.filter(s => { const d = new Date(s.timestamp); return d >= fourteenAgo && d < sevenAgo; });
-  const last14 = sales.filter(s => new Date(s.timestamp) >= fourteenAgo);
+  const thisWeek = activeSales.filter(s => new Date(s.timestamp) >= sevenAgo);
+  const lastWeek = activeSales.filter(s => { const d = new Date(s.timestamp); return d >= fourteenAgo && d < sevenAgo; });
+  const last14 = activeSales.filter(s => new Date(s.timestamp) >= fourteenAgo);
 
   const revThis = thisWeek.reduce((s, x) => s + x.qty * x.unitPrice, 0);
   const revLast = lastWeek.reduce((s, x) => s + x.qty * x.unitPrice, 0);
@@ -2174,7 +2387,7 @@ function readFileAsBase64(file) {
   });
 }
 
-function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onAddStock }) {
+function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onAddStock, onReceiveStock }) {
   const [mode, setMode] = useState('sales'); // sales | stock
   const [inputMode, setInputMode] = useState('text'); // text | photo
   const [raw, setRaw] = useState('');
@@ -2227,19 +2440,29 @@ function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onA
           ? inventory.find(i => i.dbId === row.matchedItem.id) || null
           : null;
         const match = matchedItem ? { item: matchedItem, confidence: row.matchedItem.confidence } : null;
-        // Rough per-unit price estimate for the create-new-item prefill — the
-        // page usually shows a line total, not a unit price, so divide it
-        // back out by quantity. Just a starting guess; always editable.
+        // Rough per-unit estimate — the page usually shows a line total, not
+        // a unit figure, so divide it back out by quantity. In Stock Arrival
+        // mode this is what was paid to the supplier (cost); in Recording
+        // Sales mode it's what the customer paid (sale price). Same raw
+        // number, different meaning depending on which ledger this is.
         const qty = row.quantity || 1;
-        const estUnitPrice = row.amountOnPage ? Math.round(row.amountOnPage / qty) : '';
+        const estUnitAmount = row.amountOnPage ? Math.round(row.amountOnPage / qty) : '';
         return {
           rawLine: row.rawDescription,
           overrideQty: qty,
           suggestedCategory: row.suggestedCategory || '',
+          suggestedExpiryDate: row.suggestedExpiryDate || '',
+          suggestedBatchNumber: row.suggestedBatchNumber || '',
+          suggestedUnitCost: mode === 'stock' ? estUnitAmount : '',
           match,
           confirmed: !!match && !row.needsReview,
           creating: false,
-          newDraft: { name: row.rawDescription, category: row.suggestedCategory || '', price: estUnitPrice },
+          newDraft: {
+            name: row.rawDescription, category: row.suggestedCategory || '',
+            price: mode === 'sales' ? estUnitAmount : '',
+            cost: mode === 'stock' ? estUnitAmount : '',
+            expiryDate: row.suggestedExpiryDate || '', batchNumber: row.suggestedBatchNumber || '',
+          },
         };
       });
       setParsed(results);
@@ -2269,20 +2492,40 @@ function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onA
     const toCommit = parsed.filter(isRowReady);
     if (toCommit.length === 0) return setError('Nothing ready to record yet');
     setCommitting(true); setError('');
+    // Tracks items created earlier in this same commit loop — if the same
+    // new product appears on two lines of one scanned page, the second line
+    // restocks the first instead of creating a duplicate item.
+    const createdThisBatch = [];
     try {
       for (const row of toCommit) {
         if (row.creating) {
-          // Stock Arrival only (the button is hidden in Recording Sales mode) —
-          // create the item fresh, with initial stock set to the parsed quantity.
-          await onAddStock({
-            isNew: true, name: row.newDraft.name.trim(), category: row.newDraft.category || '',
-            price: Number(row.newDraft.price) || 0, cost: 0, stock: row.overrideQty,
-            warehouseStock: 0, reorder: 0, brand: '', size: '', origin: '', expiryDate: '', batchNumber: '',
-          });
+          const normName = row.newDraft.name.trim().toLowerCase();
+          const dupe = createdThisBatch.find(c => c.name.trim().toLowerCase() === normName);
+          if (dupe) {
+            const updated = await onAddStock({ ...dupe, stock: dupe.stock + row.overrideQty });
+            if (updated) createdThisBatch[createdThisBatch.indexOf(dupe)] = updated;
+          } else {
+            // Stock Arrival only (the button is hidden in Recording Sales mode) —
+            // create the item fresh, with initial stock set to the parsed quantity.
+            const created = await onAddStock({
+              isNew: true, name: row.newDraft.name.trim(), category: row.newDraft.category || '',
+              price: Number(row.newDraft.price) || 0, cost: Number(row.newDraft.cost) || 0, stock: row.overrideQty,
+              warehouseStock: 0, reorder: 0, brand: '', size: '', origin: '',
+              expiryDate: row.newDraft.expiryDate || '', batchNumber: row.newDraft.batchNumber || '',
+            });
+            if (created) createdThisBatch.push(created);
+          }
         } else if (mode === 'sales') {
           await onRecordSales(row.match.item.id, row.overrideQty, payment);
         } else {
-          await onAddStock({ ...row.match.item, stock: row.match.item.stock + row.overrideQty });
+          // Stock Arrival, matched existing item — receive-stock recalculates
+          // cost as a weighted average if this delivery's price differs from
+          // what's on file (rather than leaving cost frozen at whatever it
+          // was when the item was first added), and fills expiry/batch only
+          // if the item doesn't already have one — never silently overwrites
+          // real existing data, since this model tracks one expiry per item,
+          // not per batch.
+          await onReceiveStock(row.match.item, row.overrideQty, row.suggestedUnitCost || null, row.suggestedExpiryDate, row.suggestedBatchNumber);
         }
       }
       setDone(true); setRaw(''); setParsed(null); clearPhoto();
@@ -2399,8 +2642,20 @@ function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onA
                           style={{ padding: '7px 9px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_BODY, fontSize: 13 }}
                         />
                         <input
+                          type="number" value={row.newDraft.cost} onChange={e => updateNewDraft(idx, 'cost', e.target.value)}
+                          placeholder="Cost price (₦, optional)" style={{ padding: '7px 9px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_MONO, fontSize: 13 }}
+                        />
+                        <input
                           type="number" value={row.newDraft.price} onChange={e => updateNewDraft(idx, 'price', e.target.value)}
                           placeholder="Sale price (₦)" style={{ padding: '7px 9px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_MONO, fontSize: 13 }}
+                        />
+                        <input
+                          type="date" value={row.newDraft.expiryDate} onChange={e => updateNewDraft(idx, 'expiryDate', e.target.value)}
+                          style={{ padding: '7px 9px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: row.newDraft.expiryDate ? C.paper : C.paperDim, fontFamily: FONT_BODY, fontSize: 12 }}
+                        />
+                        <input
+                          value={row.newDraft.batchNumber} onChange={e => updateNewDraft(idx, 'batchNumber', e.target.value)}
+                          placeholder="Batch/lot (optional)" style={{ padding: '7px 9px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_BODY, fontSize: 13 }}
                         />
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -2416,6 +2671,12 @@ function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onA
                           <div style={{ flex: 1, minWidth: 0 }}>
                             <div style={{ fontSize: 13, fontWeight: 600 }}>{row.match.item.name}</div>
                             <div style={{ fontSize: 11, color: C.paperDim, marginTop: 2 }}>{row.match.item.brand} · {Math.round(row.match.confidence * 100)}% match</div>
+                            {mode === 'stock' && row.suggestedExpiryDate && !row.match.item.expiryDate && (
+                              <div style={{ fontSize: 10, color: C.teal, marginTop: 3 }}>Will set expiry: {row.suggestedExpiryDate} (this item has none yet)</div>
+                            )}
+                            {mode === 'stock' && row.suggestedUnitCost && Number(row.suggestedUnitCost) !== Number(row.match.item.cost) && (
+                              <div style={{ fontSize: 10, color: C.teal, marginTop: 3 }}>Cost will update to a weighted average (was {naira(row.match.item.cost)}, this delivery ≈{naira(row.suggestedUnitCost)}/unit)</div>
+                            )}
                           </div>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                             <input type="number" value={row.overrideQty} min={1} onChange={e => updateQty(idx, e.target.value)} style={{ width: 52, textAlign: 'center', padding: '5px 6px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_MONO, fontSize: 14, fontWeight: 700 }} />
