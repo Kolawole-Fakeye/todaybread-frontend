@@ -5,6 +5,8 @@ import {
   ShoppingCart, BarChart3, Wallet, Boxes, Wrench, Link2, Check, Sparkles, ArrowUp, ArrowDown, Timer, ArchiveX, Award,
   Wifi, WifiOff, LogOut, Server, CloudUpload, AlertCircle, Users, ClipboardList, Camera, Type
 } from 'lucide-react';
+// New dependency — run: npm install @simplewebauthn/browser
+import { startRegistration, startAuthentication, browserSupportsWebAuthn } from '@simplewebauthn/browser';
 
 /* ---------------------------------------------------------------
    DESIGN TOKENS — grounded in the auto-fluids import trade:
@@ -82,6 +84,22 @@ const INDUSTRY_OPTIONS = [
 
 function naira(n) {
   return '₦' + Math.round(n).toLocaleString('en-NG');
+}
+
+// ⚠️ REPLACE THIS with your real WhatsApp number (the one you want new
+// signups and "Contact us" messages to land on), digits only, country code,
+// no + or spaces — e.g. "2348012345678".
+const TODAYBREAD_WHATSAPP_NUMBER = '2348000000000';
+
+// Click-to-chat (wa.me) is just a link — it opens WhatsApp with a message
+// pre-filled, but a human still has to tap Send. There's no way to make a
+// message arrive in someone's WhatsApp with zero taps without going through
+// the official Business API (which is what we're deliberately avoiding for
+// now). Omit `number` to let the person pick who to send it to, instead of
+// a fixed recipient — useful for "share your catalogue with a customer".
+function waLink(text, number) {
+  const base = number ? `https://wa.me/${number}` : 'https://wa.me/';
+  return `${base}?text=${encodeURIComponent(text)}`;
 }
 
 function StockGauge({ stock, reorder }) {
@@ -510,6 +528,13 @@ export default function TodayBread() {
 
       {role === 'owner' && <SubscriptionBanner business={auth.business} />}
 
+      {role === 'owner' && (
+        <BiometricEnrollPrompt
+          apiUrl={apiUrl} token={token} enrolled={!!auth.user?.biometricsEnrolled}
+          onEnrolledChange={(val) => setAuth(a => ({ ...a, user: { ...a.user, biometricsEnrolled: val } }))}
+        />
+      )}
+
       <TabBar role={role} tab={tab} setTab={setTab} lowStockCount={lowStockItems.length} />
 
       <div style={{ padding: '16px', maxWidth: 720, margin: '0 auto' }}>
@@ -529,7 +554,7 @@ export default function TodayBread() {
           <ReportsView sales={sales} inventory={inventory} onVoid={voidSale} apiUrl={apiUrl} token={token} />
         )}
         {tab === 'whatsapp' && role === 'owner' && (
-          <WhatsAppView sales={sales} inventory={inventory} lowStockItems={lowStockItems} business={auth.business} apiUrl={apiUrl} />
+          <WhatsAppView sales={sales} inventory={inventory} lowStockItems={lowStockItems} business={auth.business} apiUrl={apiUrl} token={token} onBusinessUpdated={(patch) => setAuth(a => ({ ...a, business: { ...a.business, ...patch } }))} />
         )}
         {tab === 'staff' && role === 'owner' && (
           <StaffView apiUrl={apiUrl} token={token} />
@@ -537,6 +562,7 @@ export default function TodayBread() {
         {tab === 'notebook' && role === 'owner' && (
           <NotebookView inventory={inventory} categories={categories} apiUrl={apiUrl} token={token} onRecordSales={recordSale} onAddStock={saveItem} onReceiveStock={receiveStock} />
         )}
+        <LegalFooterLinks />
       </div>
     </div>
   );
@@ -603,6 +629,7 @@ function LoginScreen({ apiUrl, onLogin, onShowSignup }) {
   const [pin, setPin] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [bioLoading, setBioLoading] = useState(false);
   const [forgotMode, setForgotMode] = useState(false);
   const [forgotPhone, setForgotPhone] = useState('');
   const [forgotSent, setForgotSent] = useState(false);
@@ -620,11 +647,34 @@ function LoginScreen({ apiUrl, onLogin, onShowSignup }) {
       // Better to show a clear error and let them retry.
       const me = await apiRequest(apiUrl, '/me', { token: data.token });
       const adminCheck = await apiRequest(apiUrl, '/admin/check', { token: data.token }).catch(() => ({ isSuperAdmin: false }));
-      await onLogin({ token: data.token, user: { ...data.user, isSuperAdmin: adminCheck.isSuperAdmin }, business: me.business });
+      await onLogin({ token: data.token, user: { ...data.user, isSuperAdmin: adminCheck.isSuperAdmin, biometricsEnrolled: me.user?.biometricsEnrolled }, business: me.business });
     } catch (e) {
       setError(e.message || 'Login failed');
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Face ID / biometric login — owner-only accounts will have this set up.
+  // Requires the phone field to be filled in (that's how the backend knows
+  // whose enrolled credentials to check against).
+  const handleFaceIdLogin = async () => {
+    if (!phone.trim()) return setError('Enter your phone number first, then tap Face ID');
+    setBioLoading(true); setError('');
+    try {
+      const options = await apiRequest(apiUrl, '/auth/webauthn/login-options', { method: 'POST', body: { phone: phone.trim() } });
+      // NOTE: @simplewebauthn/browser v9+ expects { optionsJSON: options }.
+      // If you're on an older version, this may just be `options` directly —
+      // check that package's docs if this throws a shape error.
+      const authResponse = await startAuthentication({ optionsJSON: options });
+      const data = await apiRequest(apiUrl, '/auth/webauthn/login-verify', { method: 'POST', body: { phone: phone.trim(), response: authResponse } });
+      const me = await apiRequest(apiUrl, '/me', { token: data.token });
+      const adminCheck = await apiRequest(apiUrl, '/admin/check', { token: data.token }).catch(() => ({ isSuperAdmin: false }));
+      await onLogin({ token: data.token, user: { ...data.user, isSuperAdmin: adminCheck.isSuperAdmin, biometricsEnrolled: me.user?.biometricsEnrolled }, business: me.business });
+    } catch (e) {
+      setError(e.message || 'Biometric login failed or was cancelled');
+    } finally {
+      setBioLoading(false);
     }
   };
 
@@ -661,6 +711,11 @@ function LoginScreen({ apiUrl, onLogin, onShowSignup }) {
             <button onClick={handleLogin} disabled={loading} style={{ width: '100%', padding: '12px 0', borderRadius: 8, border: 'none', background: C.amber, color: C.ink, fontWeight: 700, fontSize: 14, cursor: 'pointer', marginBottom: 10 }}>
               {loading ? 'Signing in…' : 'Sign in'}
             </button>
+            {browserSupportsWebAuthn() && (
+              <button onClick={handleFaceIdLogin} disabled={bioLoading} style={{ width: '100%', padding: '11px 0', borderRadius: 8, border: `1px solid ${C.teal}66`, background: `${C.teal}14`, color: C.teal, fontWeight: 700, fontSize: 13, cursor: 'pointer', marginBottom: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                <Lock size={14} /> {bioLoading ? 'Verifying…' : 'Sign in with Face ID / biometrics'}
+              </button>
+            )}
             <button onClick={() => setForgotMode(true)} style={{ width: '100%', padding: '8px 0', borderRadius: 8, border: 'none', background: 'transparent', color: C.paperDim, fontSize: 12, cursor: 'pointer', marginBottom: 4 }}>
               Forgot PIN?
             </button>
@@ -695,6 +750,7 @@ function LoginScreen({ apiUrl, onLogin, onShowSignup }) {
             </button>
           </>
         )}
+        <LegalFooterLinks />
       </div>
     </div>
   );
@@ -730,6 +786,13 @@ function SignupScreen({ apiUrl, onSignup, onBackToLogin }) {
         },
       });
       await onSignup({ token: data.token, user: data.user, business: data.business });
+      // Opens WhatsApp with an introduction message ready to send to TodayBread
+      // support — this is the "welcome" touchpoint for now: it can't arrive in
+      // their WhatsApp with zero taps without the official Business API, so
+      // instead it's one tap for THEM to say hello, and a real person can
+      // reply with the actual welcome message.
+      const introText = `Hi TodayBread! 👋 ${form.businessName.trim()} just signed up — excited to get started!`;
+      window.open(waLink(introText, TODAYBREAD_WHATSAPP_NUMBER), '_blank');
     } catch (e) {
       setError(e.message || 'Could not create your business');
     } finally {
@@ -801,6 +864,7 @@ function SignupScreen({ apiUrl, onSignup, onBackToLogin }) {
         >
           Already have an account? Sign in
         </button>
+        <LegalFooterLinks />
       </div>
     </div>
   );
@@ -959,6 +1023,133 @@ function SubscriptionBanner({ business }) {
   return null;
 }
 
+function LegalModal({ title, children, onClose }) {
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 60, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }} onClick={onClose}>
+      <div style={{ background: C.panel, borderTop: `1px solid ${C.line}`, borderRadius: '16px 16px 0 0', padding: 20, width: '100%', maxWidth: 720, maxHeight: '82vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
+        <div style={{ fontFamily: FONT_DISPLAY, fontSize: 17, textTransform: 'uppercase', letterSpacing: '0.02em', marginBottom: 14 }}>{title}</div>
+        <div style={{ fontSize: 13, color: C.paperDim, lineHeight: 1.7 }}>{children}</div>
+        <button onClick={onClose} style={{ width: '100%', marginTop: 18, padding: '11px 0', borderRadius: 8, border: 'none', background: C.amber, color: C.ink, fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>Close</button>
+      </div>
+    </div>
+  );
+}
+
+function TermsModal({ onClose }) {
+  return (
+    <LegalModal title="Terms of Service" onClose={onClose}>
+      <p style={{ color: C.paper, fontWeight: 600, marginBottom: 4 }}>What TodayBread is</p>
+      <p style={{ marginBottom: 12 }}>TodayBread is an inventory and sales management tool for small businesses. You use it to track stock, record sales, and manage your business data. It is provided as-is, and we work continuously to keep it reliable, but we don't guarantee it will be uninterrupted or error-free.</p>
+
+      <p style={{ color: C.paper, fontWeight: 600, marginBottom: 4 }}>Your data</p>
+      <p style={{ marginBottom: 12 }}>Your inventory, sales, and business information belong to you. We store it to provide the service and don't sell it to third parties. You can request an export or deletion of your data at any time by contacting us.</p>
+
+      <p style={{ color: C.paper, fontWeight: 600, marginBottom: 4 }}>Subscription & payment</p>
+      <p style={{ marginBottom: 12 }}>New businesses get a free trial period. After that, continued use requires a monthly subscription fee, payable by bank transfer to your dedicated account. Payment is your responsibility — if a payment is missed, your account isn't locked automatically, but continued non-payment may result in suspension.</p>
+
+      <p style={{ color: C.paper, fontWeight: 600, marginBottom: 4 }}>Your responsibilities</p>
+      <p style={{ marginBottom: 12 }}>You're responsible for the accuracy of the data you enter, for keeping your PIN and account access secure, and for how your staff accounts are used. Automated features (like AI-assisted ledger scanning) are tools to speed up data entry — you're responsible for reviewing and confirming anything before it's saved.</p>
+
+      <p style={{ color: C.paper, fontWeight: 600, marginBottom: 4 }}>Limitation of liability</p>
+      <p style={{ marginBottom: 12 }}>TodayBread is a tool to help you run your business — it isn't a substitute for your own financial or inventory record-keeping. We aren't liable for business losses arising from use of the app, including data entry errors, technical downtime, or third-party service interruptions (e.g. payment or messaging providers).</p>
+
+      <p style={{ color: C.paper, fontWeight: 600, marginBottom: 4 }}>Changes</p>
+      <p style={{ marginBottom: 4 }}>These terms may be updated as the product grows. Continued use of TodayBread after a change means you accept the update.</p>
+    </LegalModal>
+  );
+}
+
+function ContactModal({ onClose, businessName }) {
+  return (
+    <LegalModal title="Contact us" onClose={onClose}>
+      <p style={{ marginBottom: 14 }}>Questions, an issue with your account, or need a hand with something? Reach out any time.</p>
+      <a
+        href={waLink(`Hi TodayBread! ${businessName ? `This is ${businessName}. ` : ''}I have a question.`, TODAYBREAD_WHATSAPP_NUMBER)}
+        target="_blank" rel="noopener noreferrer"
+        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, width: '100%', padding: '12px 0', borderRadius: 8, background: `${C.teal}22`, color: C.teal, fontWeight: 700, fontSize: 14, textDecoration: 'none' }}
+      ><MessageCircle size={16} /> Message us on WhatsApp</a>
+    </LegalModal>
+  );
+}
+
+function LegalFooterLinks() {
+  const [modal, setModal] = useState(null); // 'terms' | 'contact' | null
+  return (
+    <>
+      <div style={{ textAlign: 'center', marginTop: 18, fontSize: 11, color: C.paperDim }}>
+        <button onClick={() => setModal('terms')} style={{ background: 'none', border: 'none', color: C.paperDim, textDecoration: 'underline', cursor: 'pointer', fontSize: 11, padding: '0 6px' }}>Terms of Service</button>
+        ·
+        <button onClick={() => setModal('contact')} style={{ background: 'none', border: 'none', color: C.paperDim, textDecoration: 'underline', cursor: 'pointer', fontSize: 11, padding: '0 6px' }}>Contact us</button>
+      </div>
+      {modal === 'terms' && <TermsModal onClose={() => setModal(null)} />}
+      {modal === 'contact' && <ContactModal onClose={() => setModal(null)} />}
+    </>
+  );
+}
+
+function BiometricEnrollPrompt({ apiUrl, token, enrolled, onEnrolledChange }) {
+  const [dismissed, setDismissed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  if (!browserSupportsWebAuthn()) return null;
+
+  const handleEnroll = async () => {
+    setBusy(true); setError('');
+    try {
+      const options = await apiRequest(apiUrl, '/auth/webauthn/register-options', { method: 'POST', token });
+      // NOTE: same version caveat as login — v9+ of @simplewebauthn/browser
+      // expects { optionsJSON: options }.
+      const attResponse = await startRegistration({ optionsJSON: options });
+      await apiRequest(apiUrl, '/auth/webauthn/register-verify', { method: 'POST', token, body: attResponse });
+      onEnrolledChange(true);
+    } catch (e) {
+      setError(e.message || 'Could not enable Face ID');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleTurnOff = async () => {
+    if (!window.confirm('Turn off Face ID login on this device?')) return;
+    setBusy(true); setError('');
+    try {
+      await apiRequest(apiUrl, '/auth/webauthn/credentials', { method: 'DELETE', token });
+      onEnrolledChange(false);
+    } catch (e) {
+      setError(e.message || 'Could not turn off Face ID');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (enrolled) {
+    return (
+      <div style={{ maxWidth: 720, margin: '0 auto', padding: '0 16px 10px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, color: C.paperDim }}>
+          <Lock size={12} color={C.teal} /> Face ID enabled on this device
+          <button onClick={handleTurnOff} disabled={busy} style={{ background: 'none', border: 'none', color: C.paperDim, textDecoration: 'underline', fontSize: 11, cursor: 'pointer', padding: 0 }}>Turn off</button>
+        </div>
+        {error && <div style={{ color: C.red, fontSize: 10, marginTop: 4 }}>{error}</div>}
+      </div>
+    );
+  }
+
+  if (dismissed) return null;
+
+  return (
+    <div style={{ maxWidth: 720, margin: '0 auto', padding: '0 16px 10px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 11, background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, padding: '7px 12px' }}>
+        <Lock size={12} color={C.paperDim} />
+        <span style={{ color: C.paperDim }}>Skip typing your PIN next time —</span>
+        <button onClick={handleEnroll} disabled={busy} style={{ background: 'none', border: 'none', color: C.teal, fontWeight: 700, cursor: 'pointer', padding: 0, fontSize: 11 }}>{busy ? 'Setting up…' : 'enable Face ID'}</button>
+        <button onClick={() => setDismissed(true)} style={{ marginLeft: 'auto', background: 'none', border: 'none', color: C.paperDim, cursor: 'pointer', padding: 0, fontSize: 11 }}>Not now</button>
+      </div>
+      {error && <div style={{ color: C.red, fontSize: 10, marginTop: 4 }}>{error}</div>}
+    </div>
+  );
+}
+
 function TabBar({ role, tab, setTab, lowStockCount }) {
   const tabs = [
     ...(role === 'owner' ? [{ id: 'reports', label: 'Today', icon: Wallet }] : []),
@@ -966,7 +1157,7 @@ function TabBar({ role, tab, setTab, lowStockCount }) {
     { id: 'analytics', label: 'Best Sellers', icon: BarChart3 },
     { id: 'sale', label: 'Record Sale', icon: ShoppingCart },
     { id: 'inventory', label: 'Inventory', icon: Package },
-    ...(role === 'owner' ? [{ id: 'whatsapp', label: 'WhatsApp', icon: MessageCircle }] : []),
+    ...(role === 'owner' ? [{ id: 'whatsapp', label: 'Connect & Subscription', icon: MessageCircle }] : []),
     ...(role === 'owner' ? [{ id: 'staff', label: 'Staff', icon: Users }] : []),
     ...(role === 'owner' ? [{ id: 'notebook', label: 'Notebook', icon: ClipboardList }] : []),
   ];
@@ -2169,8 +2360,8 @@ function StatCard({ label, value, color }) {
   );
 }
 
-function WhatsAppView({ sales, inventory, lowStockItems, business, apiUrl }) {
-  const today = filterSalesByRange(sales, 'today');
+function WhatsAppView({ sales, inventory, lowStockItems, business, apiUrl, token, onBusinessUpdated }) {
+  const today = filterSalesByRange(sales.filter(s => !s.voided), 'today');
   const revenue = today.reduce((sum, s) => sum + s.qty * s.unitPrice, 0);
   const agg = {};
   today.forEach(s => { agg[s.itemId] = (agg[s.itemId] || 0) + s.qty; });
@@ -2179,13 +2370,74 @@ function WhatsAppView({ sales, inventory, lowStockItems, business, apiUrl }) {
   const dateStr = new Date().toLocaleDateString('en-NG', { weekday: 'long', day: 'numeric', month: 'long' });
   const publicCount = inventory.filter(i => i.isPublic).length;
 
+  const [payEmail, setPayEmail] = useState('');
+  const [payLoading, setPayLoading] = useState(false);
+  const [payError, setPayError] = useState('');
+
   // Derive catalogue URL from the backend URL — same origin for now
   const catalogueUrl = business?.slug
     ? `${apiUrl?.replace('/api', '') || ''}/catalogue/${business.slug}`
     : null;
 
+  const summaryText =
+    `📋 *${business?.name || 'My shop'} — ${dateStr}*\n\n` +
+    `Revenue today: ${naira(revenue)}\n` +
+    (topItem ? `Best seller: ${topItem.name} (${agg[topId]} sold)\n` : '') +
+    `Low stock alerts: ${lowStockItems.length} item${lowStockItems.length === 1 ? '' : 's'}` +
+    (catalogueUrl ? `\n\nCatalogue: ${catalogueUrl}` : '');
+
+  const shareCatalogueText = catalogueUrl
+    ? `Check out our products: ${catalogueUrl}`
+    : '';
+
+  const handleSetupPayment = async () => {
+    if (!payEmail.trim() || !payEmail.includes('@')) return setPayError('Enter a valid email address');
+    setPayLoading(true); setPayError('');
+    try {
+      const res = await apiRequest(apiUrl, '/subscription/setup-payment-account', {
+        method: 'POST', token, body: { email: payEmail.trim() },
+      });
+      onBusinessUpdated({ dva_account_number: res.accountNumber, dva_account_name: res.accountName, dva_bank_name: res.bankName });
+    } catch (e) {
+      setPayError(e.message || 'Could not set up payment account');
+    } finally {
+      setPayLoading(false);
+    }
+  };
+
   return (
     <div>
+
+      {/* Subscription payment section */}
+      <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 10, padding: 14, marginBottom: 16 }}>
+        <div style={{ fontSize: 10, color: C.paperDim, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8, fontWeight: 700 }}>💳 Subscription payment</div>
+        {business?.dva_account_number ? (
+          <>
+            <div style={{ fontSize: 12, color: C.paperDim, marginBottom: 8 }}>Transfer your monthly fee to this account any time before it's due — it's detected automatically, no need to tell anyone.</div>
+            <div style={{ background: C.panel2, borderRadius: 7, padding: '10px 12px', marginBottom: 8 }}>
+              <div style={{ fontFamily: FONT_MONO, fontSize: 18, fontWeight: 700, color: C.teal }}>{business.dva_account_number}</div>
+              <div style={{ fontSize: 11, color: C.paperDim, marginTop: 2 }}>{business.dva_bank_name} · {business.dva_account_name}</div>
+            </div>
+            <button
+              onClick={() => { navigator.clipboard?.writeText(business.dva_account_number); }}
+              style={{ padding: '7px 12px', borderRadius: 6, border: `1px solid ${C.line}`, background: 'transparent', color: C.paperDim, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}
+            >Copy account number</button>
+          </>
+        ) : (
+          <>
+            <div style={{ fontSize: 12, color: C.paperDim, marginBottom: 10 }}>Set up a dedicated account number for your subscription — transfer only, no card needed. One-time setup.</div>
+            <input
+              value={payEmail} onChange={e => setPayEmail(e.target.value)} placeholder="Your email address"
+              style={{ width: '100%', padding: '9px 10px', borderRadius: 7, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontSize: 13, marginBottom: 8 }}
+            />
+            {payError && <div style={{ color: C.red, fontSize: 11, marginBottom: 8 }}>{payError}</div>}
+            <button
+              onClick={handleSetupPayment} disabled={payLoading}
+              style={{ width: '100%', padding: '10px 0', borderRadius: 8, border: 'none', background: C.amber, color: C.ink, fontWeight: 700, fontSize: 13, cursor: 'pointer' }}
+            >{payLoading ? 'Setting up…' : 'Set up payment account'}</button>
+          </>
+        )}
+      </div>
 
       {/* Catalogue link section */}
       <div style={{ background: C.panel, border: `1px solid ${C.amber}44`, borderRadius: 10, padding: 14, marginBottom: 16 }}>
@@ -2200,16 +2452,20 @@ function WhatsAppView({ sales, inventory, lowStockItems, business, apiUrl }) {
             <div style={{ background: C.panel2, borderRadius: 7, padding: '10px 12px', fontFamily: FONT_MONO, fontSize: 12, color: C.teal, wordBreak: 'break-all', marginBottom: 10 }}>
               {catalogueUrl || `${apiUrl}/catalogue/${business?.slug || 'your-shop'}`}
             </div>
-            <div style={{ fontSize: 11, color: C.paperDim }}>Share this link on WhatsApp, your signboard, or anywhere — customers see your products without needing to log in. Powered by TodayBread.</div>
+            <a
+              href={waLink(shareCatalogueText)} target="_blank" rel="noopener noreferrer"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 12px', borderRadius: 7, background: `${C.teal}22`, color: C.teal, fontSize: 12, fontWeight: 700, textDecoration: 'none' }}
+            ><MessageCircle size={13} /> Share on WhatsApp</a>
           </>
         )}
       </div>
 
+      {/* Today's summary — real, sendable now via click-to-chat */}
       <div style={{ fontFamily: FONT_DISPLAY, fontSize: 14, textTransform: 'uppercase', letterSpacing: '0.03em', color: C.paperDim, marginBottom: 12 }}>
-        Daily summary preview
+        Today's summary
       </div>
 
-      <div style={{ background: '#0B141A', borderRadius: 12, padding: 16, border: `1px solid ${C.line}` }}>
+      <div style={{ background: '#0B141A', borderRadius: 12, padding: 16, border: `1px solid ${C.line}`, marginBottom: 12 }}>
         <div style={{
           background: '#005C4B', color: '#E9EDEF', borderRadius: '10px 10px 2px 10px', padding: '12px 14px',
           fontFamily: FONT_BODY, fontSize: 13, lineHeight: 1.6, maxWidth: '92%', marginLeft: 'auto',
@@ -2218,15 +2474,22 @@ function WhatsAppView({ sales, inventory, lowStockItems, business, apiUrl }) {
           <div>Revenue today: <b>{naira(revenue)}</b></div>
           {topItem && <div>Best seller: <b>{topItem.name}</b> ({agg[topId]} sold)</div>}
           <div>Low stock alerts: <b>{lowStockItems.length} item{lowStockItems.length === 1 ? '' : 's'}</b></div>
-          <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 4, color: '#8AB4C8' }}>
-            <Link2 size={12} /> <span style={{ textDecoration: 'underline' }}>View full dashboard →</span>
-          </div>
-          <div style={{ textAlign: 'right', fontSize: 10, color: '#8AB4C8', marginTop: 6 }}>9:00 PM ✓✓</div>
         </div>
       </div>
 
-      <div style={{ marginTop: 16, fontSize: 12, color: C.paperDim, lineHeight: 1.6, background: C.panel, padding: 12, borderRadius: 8, border: `1px solid ${C.line}` }}>
-        <b style={{ color: C.paper }}>How this gets sent for real:</b> this preview is generated from today's live data, but actually delivering it to WhatsApp needs a small backend job (using the WhatsApp Business Cloud API) running on a schedule — that's the next build step once you're ready to go from prototype to production.
+      <a
+        href={waLink(summaryText)} target="_blank" rel="noopener noreferrer"
+        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, width: '100%', padding: '12px 0', borderRadius: 8, background: C.amber, color: C.ink, fontWeight: 700, fontSize: 14, textDecoration: 'none', marginBottom: 16 }}
+      ><MessageCircle size={16} /> Send today's summary on WhatsApp</a>
+
+      <a
+        href={waLink(`Hi TodayBread! This is ${business?.name || 'a TodayBread user'} — I have a question.`, TODAYBREAD_WHATSAPP_NUMBER)}
+        target="_blank" rel="noopener noreferrer"
+        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, width: '100%', padding: '11px 0', borderRadius: 8, border: `1px solid ${C.line}`, background: 'transparent', color: C.paperDim, fontWeight: 600, fontSize: 13, textDecoration: 'none' }}
+      ><MessageCircle size={14} /> Message TodayBread support</a>
+
+      <div style={{ marginTop: 16, fontSize: 11, color: C.paperDim, lineHeight: 1.6 }}>
+        These open WhatsApp with your message ready to go — just tap send. Automatic delivery (no tapping required) is coming once WhatsApp Business verification is complete.
       </div>
     </div>
   );
