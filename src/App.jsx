@@ -3,7 +3,8 @@ import {
   Fuel, Droplet, Package, TrendingUp, TrendingDown, AlertTriangle,
   RefreshCw, MessageCircle, Lock, Clock, ChevronRight, Plus, Minus,
   ShoppingCart, BarChart3, Wallet, Boxes, Wrench, Link2, Check, Sparkles, ArrowUp, ArrowDown, Timer, ArchiveX, Award,
-  Wifi, WifiOff, LogOut, Server, CloudUpload, AlertCircle, Users, ClipboardList, Camera, Type
+  Wifi, WifiOff, LogOut, Server, CloudUpload, AlertCircle, Users, ClipboardList, Camera, Type, Printer,
+  Image as ImageIcon
 } from 'lucide-react';
 // New dependency — run: npm install @simplewebauthn/browser
 import { startRegistration, startAuthentication, browserSupportsWebAuthn } from '@simplewebauthn/browser';
@@ -73,11 +74,14 @@ function iconForCategory(category) {
 // Keys must match the backend's INDUSTRY_CATEGORIES map exactly — this is
 // what determines which starter category set gets seeded at signup.
 const INDUSTRY_OPTIONS = [
-  { value: 'auto_parts', label: 'Auto Parts & Fluids' },
+  { value: 'auto_parts', label: 'Auto Spare Parts & Mechanicals' },
+  { value: 'building_materials', label: 'Building Materials, Tiles & Sanitary Ware' },
+  { value: 'solar_energy', label: 'Solar, Inverters & Energy Systems' },
+  { value: 'electrical_cables', label: 'Electrical Cables & Industrial Fittings' },
+  { value: 'electronics', label: 'IT, Electronics & Phone Accessories' },
   { value: 'cosmetics', label: 'Cosmetics & Personal Care' },
   { value: 'pharmacy', label: 'Pharmacy & Healthcare' },
-  { value: 'electronics', label: 'IT, Electronics & Phone Accessories' },
-  { value: 'groceries', label: 'Groceries / Provisions' },
+  { value: 'groceries', label: 'Groceries & Provisions' },
   { value: 'fashion', label: 'Fashion & Accessories' },
   { value: 'other', label: 'Other / General' },
 ];
@@ -86,10 +90,9 @@ function naira(n) {
   return '₦' + Math.round(n).toLocaleString('en-NG');
 }
 
-// ⚠️ REPLACE THIS with your real WhatsApp number (the one you want new
-// signups and "Contact us" messages to land on), digits only, country code,
-// no + or spaces — e.g. "2348012345678".
-const TODAYBREAD_WHATSAPP_NUMBER = '2348000000000';
+// TodayBread's own WhatsApp number — new signups and "Contact us" /
+// "Message support" messages land here.
+const TODAYBREAD_WHATSAPP_NUMBER = '2349127897702';
 
 // Click-to-chat (wa.me) is just a link — it opens WhatsApp with a message
 // pre-filled, but a human still has to tap Send. There's no way to make a
@@ -123,6 +126,21 @@ function StockGauge({ stock, reorder }) {
         position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
         fontFamily: FONT_MONO, fontSize: 11, fontWeight: 600, color: status,
       }}>{stock}</div>
+    </div>
+  );
+}
+
+// For items with no known starting count (born straight from a Snapshot
+// photo) — a running sold total instead of a stock gauge, since there's no
+// honest baseline to show progress against.
+function SoldCounter({ totalSold }) {
+  return (
+    <div style={{
+      width: 48, height: 48, borderRadius: '50%', border: `2px solid ${C.line}`, flexShrink: 0,
+      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: C.panel2,
+    }}>
+      <div style={{ fontFamily: FONT_MONO, fontSize: 13, fontWeight: 700, color: C.amber, lineHeight: 1 }}>{totalSold}</div>
+      <div style={{ fontSize: 7, color: C.paperDim, textTransform: 'uppercase', letterSpacing: '0.04em', marginTop: 2 }}>sold</div>
     </div>
   );
 }
@@ -195,7 +213,10 @@ export default function TodayBread() {
   const [dataLoaded, setDataLoaded] = useState(false);
   const [syncStatus, setSyncStatus] = useState('idle'); // idle | syncing | error
   const [loadError, setLoadError] = useState('');
-  const [tab, setTab] = useState('sale');
+  // Owners land on the daily ledger by default now — that's the primary
+  // workflow (photograph the sales book, review, done). Staff don't have
+  // access to Snapshot, so they still land on Record Sale.
+  const [tab, setTab] = useState(() => (auth?.user?.role === 'owner' ? 'notebook' : 'sale'));
   const [now, setNow] = useState(new Date());
   const [rates, setRates] = useState(null);
   const [rateLoading, setRateLoading] = useState(false);
@@ -255,6 +276,7 @@ export default function TodayBread() {
         warehouseStock: i.warehouse_stock != null ? Number(i.warehouse_stock) : null,
         reorder: i.reorder_level, origin: i.origin, isPublic: !!i.is_public,
         expiryDate: i.expiry_date || '', batchNumber: i.batch_number || '',
+        totalSold: Number(i.total_sold || 0), stockTracked: i.stock_tracked !== false,
       }));
       const mappedSales = salesRes.sales.map(s => ({
         id: s.id, itemId: s.item_id, itemName: s.item_name, qty: s.qty,
@@ -321,7 +343,7 @@ export default function TodayBread() {
     return () => { window.removeEventListener('online', onOnline); clearInterval(interval); };
   }, [syncPending]);
 
-  const lowStockItems = useMemo(() => inventory.filter(i => i.stock <= i.reorder), [inventory]);
+  const lowStockItems = useMemo(() => inventory.filter(i => i.stockTracked !== false && i.stock <= i.reorder), [inventory]);
 
   // staff never have access to owner-only tabs — fall back to Record Sale if one is somehow active
   useEffect(() => {
@@ -333,19 +355,25 @@ export default function TodayBread() {
     }
   }, [dataLoaded, role]);
 
-  // record a sale — try live, fall back to offline queue if the network call fails
-  const recordSale = async (itemId, qty, payment) => {
+  // record a sale — try live, fall back to offline queue if the network call fails.
+  // Ledger-first: this never refuses to log a sale for lack of stock — deductStock
+  // (default true) controls whether the running stock count moves at all.
+  const recordSale = async (itemId, qty, payment, deductStock = true) => {
     const item = inventory.find(i => i.id === itemId);
-    if (!item || item.stock < qty) return;
+    if (!item) return;
     const clientUuid = crypto.randomUUID();
     const occurredAt = new Date().toISOString();
 
     // optimistic local update so the UI feels instant either way
-    setInventoryLocal(inv => inv.map(i => i.id === itemId ? { ...i, stock: i.stock - qty } : i));
+    const willDeductStock = deductStock && item.stockTracked !== false;
+    setInventoryLocal(inv => inv.map(i => i.id === itemId
+      ? { ...i, stock: willDeductStock ? i.stock - qty : i.stock, totalSold: (i.totalSold || 0) + qty }
+      : i
+    ));
     setSalesLocal(s => [{ id: clientUuid, itemId: item.id, itemName: item.name, qty, unitPrice: item.price, unitCost: item.cost, payment, timestamp: occurredAt }, ...s]);
 
     try {
-      const result = await apiRequest(apiUrl, '/sales', { method: 'POST', token, body: { itemId: item.dbId, qty, paymentMethod: payment, clientUuid } });
+      const result = await apiRequest(apiUrl, '/sales', { method: 'POST', token, body: { itemId: item.dbId, qty, paymentMethod: payment, clientUuid, deductStock } });
       // Correct the optimistic entry's id to the real backend id — voiding
       // a sale later needs the actual database id, not the client UUID.
       if (result?.sale?.id) {
@@ -353,7 +381,7 @@ export default function TodayBread() {
       }
     } catch (e) {
       // offline or server unreachable — queue it, it'll sync automatically later
-      setPending(p => [...p, { itemId: item.dbId, qty, paymentMethod: payment, clientUuid, occurredAt }]);
+      setPending(p => [...p, { itemId: item.dbId, qty, paymentMethod: payment, clientUuid, occurredAt, deductStock }]);
     }
   };
 
@@ -384,12 +412,14 @@ export default function TodayBread() {
             costPrice: formItem.cost, salePrice: formItem.price, stock: formItem.stock,
             warehouseStock: formItem.warehouseStock || 0, reorderLevel: formItem.reorder, origin: formItem.origin,
             expiryDate: formItem.expiryDate || null, batchNumber: formItem.batchNumber || null,
+            stockTracked: formItem.stockTracked !== false,
           },
         });
         // SKU is generated server-side now — use it as this item's local id.
         savedLocal = {
           ...formItem, id: res.item.sku, dbId: res.item.id,
           expiryDate: res.item.expiry_date, batchNumber: res.item.batch_number,
+          totalSold: Number(res.item.total_sold || 0), stockTracked: res.item.stock_tracked !== false,
         };
         setInventoryLocal(inv => [...inv, savedLocal]);
       } else {
@@ -484,6 +514,25 @@ export default function TodayBread() {
     }
   };
 
+  // Converts an item that's been running as a pure sold-counter (no real
+  // starting count) into normally tracked stock, once the owner has actually
+  // counted what's on the shelf. From this point it behaves exactly like any
+  // other item — the count they enter here becomes both stock and the
+  // baseline (seed_quantity).
+  const startTrackingStock = async (item, startingStock) => {
+    try {
+      const res = await apiRequest(apiUrl, `/inventory/${item.dbId}/start-tracking`, {
+        method: 'PATCH', token, body: { startingStock },
+      });
+      const updated = { ...item, stock: res.item.stock, stockTracked: true };
+      setInventoryLocal(inv => inv.map(i => i.id === item.id ? updated : i));
+      return updated;
+    } catch (e) {
+      alert(`Could not start tracking stock: ${e.message}`);
+      return undefined;
+    }
+  };
+
   const handleLogout = () => setAuth(null);
   const [authMode, setAuthMode] = useState('login');
 
@@ -539,7 +588,7 @@ export default function TodayBread() {
 
       <div style={{ padding: '16px', maxWidth: 720, margin: '0 auto' }}>
         {tab === 'inventory' && (
-          <InventoryView inventory={inventory} categories={categories} brands={brands} role={role} onSave={saveItem} onDelete={deleteItem} onClearAll={clearAllItems} onTogglePublic={togglePublic} onRestock={restockItem} apiUrl={apiUrl} token={token} loadCategories={loadCategories} loadBrands={loadBrands} loadData={loadData} />
+          <InventoryView inventory={inventory} categories={categories} brands={brands} role={role} onSave={saveItem} onDelete={deleteItem} onClearAll={clearAllItems} onTogglePublic={togglePublic} onRestock={restockItem} onStartTracking={startTrackingStock} apiUrl={apiUrl} token={token} loadCategories={loadCategories} loadBrands={loadBrands} loadData={loadData} />
         )}
         {tab === 'sale' && (
           <SaleView inventory={inventory} onSubmit={recordSale} sales={sales} role={role} onVoid={voidSale} />
@@ -548,7 +597,7 @@ export default function TodayBread() {
           <AnalyticsView sales={sales} role={role} />
         )}
         {tab === 'insights' && role === 'owner' && (
-          <InsightsView sales={sales} inventory={inventory} />
+          <InsightsView sales={sales} inventory={inventory} business={auth.business} apiUrl={apiUrl} token={token} onBusinessUpdated={(patch) => setAuth(a => ({ ...a, business: { ...a.business, ...patch } }))} />
         )}
         {tab === 'reports' && role === 'owner' && (
           <ReportsView sales={sales} inventory={inventory} onVoid={voidSale} apiUrl={apiUrl} token={token} />
@@ -1152,6 +1201,10 @@ function BiometricEnrollPrompt({ apiUrl, token, enrolled, onEnrolledChange }) {
 
 function TabBar({ role, tab, setTab, lowStockCount }) {
   const tabs = [
+    // Snapshot leads for owners — snap a photo of the sales book, review,
+    // save. Record Sale and Inventory remain right behind it for anyone who
+    // wants the fuller manual/tracked experience, just no longer the front door.
+    ...(role === 'owner' ? [{ id: 'notebook', label: 'Snapshot', icon: ClipboardList }] : []),
     ...(role === 'owner' ? [{ id: 'reports', label: 'Today', icon: Wallet }] : []),
     ...(role === 'owner' ? [{ id: 'insights', label: 'Insights', icon: Sparkles }] : []),
     { id: 'analytics', label: 'Best Sellers', icon: BarChart3 },
@@ -1159,7 +1212,6 @@ function TabBar({ role, tab, setTab, lowStockCount }) {
     { id: 'inventory', label: 'Inventory', icon: Package },
     ...(role === 'owner' ? [{ id: 'whatsapp', label: 'Connect & Subscription', icon: MessageCircle }] : []),
     ...(role === 'owner' ? [{ id: 'staff', label: 'Staff', icon: Users }] : []),
-    ...(role === 'owner' ? [{ id: 'notebook', label: 'Notebook', icon: ClipboardList }] : []),
   ];
   return (
     <div style={{ display: 'flex', overflowX: 'auto', borderBottom: `1px solid ${C.line}`, maxWidth: 720, margin: '0 auto', padding: '0 16px' }}>
@@ -1291,7 +1343,7 @@ function ManageTaxonomyModal({ apiUrl, token, categories, brands, onClose, onCha
   );
 }
 
-function InventoryView({ inventory, categories: allCategories, brands: allBrands, role, onSave, onDelete, onClearAll, onTogglePublic, onRestock, apiUrl, token, loadCategories, loadBrands, loadData }) {
+function InventoryView({ inventory, categories: allCategories, brands: allBrands, role, onSave, onDelete, onClearAll, onTogglePublic, onRestock, onStartTracking, apiUrl, token, loadCategories, loadBrands, loadData }) {
   const [filter, setFilter] = useState('All');
   const [editingItem, setEditingItem] = useState(undefined);
   const [confirmClearAll, setConfirmClearAll] = useState(false);
@@ -1419,7 +1471,7 @@ function InventoryView({ inventory, categories: allCategories, brands: allBrands
         {items.map(item => {
           const Icon = iconForCategory(item.category);
           const catColor = colorForCategory(item.category);
-          const low = item.stock <= item.reorder;
+          const low = item.stockTracked !== false && item.stock <= item.reorder;
           const costNotSet = !item.cost || Number(item.cost) === 0;
           let daysToExpiry = null;
           if (item.expiryDate) {
@@ -1436,7 +1488,7 @@ function InventoryView({ inventory, categories: allCategories, brands: allBrands
             }}
               onClick={() => role === 'owner' && setEditingItem(item)}
             >
-              <StockGauge stock={item.stock} reorder={item.reorder} />
+              {item.stockTracked === false ? <SoldCounter totalSold={item.totalSold || 0} /> : <StockGauge stock={item.stock} reorder={item.reorder} />}
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
                   <Icon size={12} color={catColor} />
@@ -1470,7 +1522,7 @@ function InventoryView({ inventory, categories: allCategories, brands: allBrands
                   </div>
                 )}
                 <div style={{ fontSize: 10, color: low ? C.red : C.paperDim, marginTop: 4, fontWeight: 600 }}>
-                  {low ? 'RESTOCK FLOOR' : `reorder @ ${item.reorder}`}
+                  {item.stockTracked === false ? 'no starting count set' : low ? 'RESTOCK FLOOR' : `reorder @ ${item.reorder}`}
                 </div>
                 {role === 'owner' && item.warehouseStock != null && item.warehouseStock > 0 && (
                   <button
@@ -1499,14 +1551,19 @@ function InventoryView({ inventory, categories: allCategories, brands: allBrands
           onSave={handleSave}
           onDelete={editingItem ? () => handleDelete(editingItem.id) : null}
           onCancel={() => setEditingItem(undefined)}
+          onStartTracking={onStartTracking}
         />
       )}
     </div>
   );
 }
 
-function ItemForm({ item, existingCategories, existingBrands, onSave, onDelete, onCancel }) {
+function ItemForm({ item, existingCategories, existingBrands, onSave, onDelete, onCancel, onStartTracking }) {
   const isNew = !item;
+  const isUntracked = !isNew && item.stockTracked === false;
+  const [startingCount, setStartingCount] = useState('');
+  const [startTrackingOpen, setStartTrackingOpen] = useState(false);
+  const [startTrackingBusy, setStartTrackingBusy] = useState(false);
   // Zero and "not entered yet" look identical in a number input once you
   // start typing into it ("0" + "5" becomes "05") — so any numeric field
   // that's currently zero is shown blank instead, with a placeholder hint.
@@ -1525,6 +1582,19 @@ function ItemForm({ item, existingCategories, existingBrands, onSave, onDelete, 
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const set = (key, val) => setForm(f => ({ ...f, [key]: val }));
+
+  const handleStartTracking = async () => {
+    const count = Number(startingCount);
+    if (!Number.isFinite(count) || count < 0 || startingCount === '') return;
+    setStartTrackingBusy(true);
+    const updated = await onStartTracking(item, count);
+    setStartTrackingBusy(false);
+    // The item prop is a snapshot from when this form opened, so it won't
+    // pick up stockTracked flipping to true — close rather than try to
+    // re-render this modal as now-tracked. The list behind it already has
+    // the update (onStartTracking updates the parent's inventory state).
+    if (updated) onCancel();
+  };
 
   const handleSubmit = () => {
     if (!form.name.trim()) return setError('Item name is required');
@@ -1605,10 +1675,39 @@ function ItemForm({ item, existingCategories, existingBrands, onSave, onDelete, 
             <span style={labelStyle}>Sale price (₦) *</span>
             <input style={inputStyle} type="number" value={form.price} onChange={e => set('price', e.target.value)} placeholder="-" />
           </label>
-          <label>
-            <span style={labelStyle}>Shop floor stock</span>
-            <input style={inputStyle} type="number" value={form.stock} onChange={e => set('stock', e.target.value)} placeholder="-" />
-          </label>
+          {isUntracked ? (
+            <div style={{ gridColumn: '1 / -1', background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 8, padding: 12 }}>
+              <div style={{ fontSize: 11, color: C.paperDim, marginBottom: 8 }}>
+                Not tracking stock yet — <span style={{ color: C.amber, fontWeight: 700 }}>{item.totalSold || 0} sold</span> so far. This item was created straight from a sale, so there's no real starting count on file.
+              </div>
+              {!startTrackingOpen ? (
+                <button
+                  type="button" onClick={() => setStartTrackingOpen(true)}
+                  style={{ padding: '8px 12px', borderRadius: 7, border: `1px solid ${C.teal}66`, background: `${C.teal}18`, color: C.teal, fontWeight: 700, fontSize: 12, cursor: 'pointer' }}
+                >Start tracking stock</button>
+              ) : (
+                <div>
+                  <span style={{ ...labelStyle, display: 'block', marginBottom: 4 }}>Count what's actually on the shelf right now</span>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <input
+                      type="number" min={0} autoFocus value={startingCount}
+                      onChange={e => setStartingCount(e.target.value)}
+                      placeholder="e.g. 20" style={{ ...inputStyle, marginTop: 0, flex: 1 }}
+                    />
+                    <button
+                      type="button" onClick={handleStartTracking} disabled={startTrackingBusy || startingCount === ''}
+                      style={{ padding: '9px 14px', borderRadius: 7, border: 'none', background: startingCount !== '' ? C.teal : C.line, color: startingCount !== '' ? '#fff' : C.paperDim, fontWeight: 700, fontSize: 12, cursor: startingCount !== '' ? 'pointer' : 'default' }}
+                    >{startTrackingBusy ? '…' : 'Confirm'}</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <label>
+              <span style={labelStyle}>Shop floor stock</span>
+              <input style={inputStyle} type="number" value={form.stock} onChange={e => set('stock', e.target.value)} placeholder="-" />
+            </label>
+          )}
           <label>
             <span style={labelStyle}>Warehouse stock</span>
             <input style={inputStyle} type="number" value={form.warehouseStock} onChange={e => set('warehouseStock', e.target.value)} placeholder="-" />
@@ -1669,10 +1768,13 @@ function SaleView({ inventory, onSubmit, sales, role, onVoid }) {
   const [itemId, setItemId] = useState(null);
   const [qty, setQty] = useState(1);
   const [payment, setPayment] = useState('Cash');
+  const [deductStock, setDeductStock] = useState(true);
   const [confirmed, setConfirmed] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
 
-  const available = inventory.filter(i => i.stock > 0);
+  // Ledger-first: every item is sellable regardless of stock count — the
+  // count is advisory, not a gate on logging what actually happened.
+  const available = inventory;
   const item = available.find(i => i.id === itemId);
 
   const filtered = search.trim().length > 0
@@ -1699,8 +1801,8 @@ function SaleView({ inventory, onSubmit, sales, role, onVoid }) {
   };
 
   const submit = () => {
-    if (!item || qty < 1 || qty > item.stock) return;
-    onSubmit(itemId, qty, payment);
+    if (!item || qty < 1) return;
+    onSubmit(itemId, qty, payment, deductStock);
     setConfirmed(true);
     setQty(1);
     setItemId(null);
@@ -1767,7 +1869,7 @@ function SaleView({ inventory, onSubmit, sales, role, onVoid }) {
               >
                 <div>
                   <div style={{ fontSize: 13, fontWeight: 600, color: C.paper }}>{i.name}</div>
-                  <div style={{ fontSize: 11, color: C.paperDim, marginTop: 2 }}>{i.brand} · {i.size} · {i.stock} in stock</div>
+                  <div style={{ fontSize: 11, color: C.paperDim, marginTop: 2 }}>{i.brand} · {i.size} · {i.stockTracked === false ? `${i.totalSold || 0} sold` : `${i.stock} in stock`}</div>
                 </div>
                 <div style={{ fontFamily: FONT_MONO, fontSize: 12, fontWeight: 700, color: C.amber, flexShrink: 0, marginLeft: 10 }}>{naira(i.price)}</div>
               </button>
@@ -1780,7 +1882,7 @@ function SaleView({ inventory, onSubmit, sales, role, onVoid }) {
       {item && (
         <div style={{ background: `${C.amber}14`, border: `1px solid ${C.amber}44`, borderRadius: 8, padding: '10px 12px', marginBottom: 14 }}>
           <div style={{ fontSize: 13, fontWeight: 600 }}>{item.name}</div>
-          <div style={{ fontSize: 11, color: C.paperDim, marginTop: 2 }}>{item.brand} · {item.size} · {item.stock} in stock</div>
+          <div style={{ fontSize: 11, color: C.paperDim, marginTop: 2 }}>{item.brand} · {item.size} · {item.stockTracked === false ? `${item.totalSold || 0} sold` : `${item.stock} in stock`}</div>
         </div>
       )}
 
@@ -1793,16 +1895,41 @@ function SaleView({ inventory, onSubmit, sales, role, onVoid }) {
               type="number"
               value={qty}
               min={1}
-              max={item.stock}
-              onChange={e => setQty(Math.max(1, Math.min(item.stock, Number(e.target.value) || 1)))}
+              onChange={e => setQty(Math.max(1, Number(e.target.value) || 1))}
               style={{
                 width: 60, textAlign: 'center', padding: '6px 8px', borderRadius: 6,
                 border: `1px solid ${C.line}`, background: C.ink, color: C.paper,
                 fontFamily: FONT_MONO, fontSize: 18, fontWeight: 700,
               }}
             />
-            <button onClick={() => setQty(q => Math.min(item.stock, q + 1))} style={qtyBtnStyle}><Plus size={14} /></button>
+            <button onClick={() => setQty(q => q + 1)} style={qtyBtnStyle}><Plus size={14} /></button>
           </div>
+
+          {item.stockTracked !== false && qty > item.stock && (
+            <div style={{ fontSize: 11, color: C.amber, marginTop: -10, marginBottom: 14 }}>
+              More than the {item.stock} currently on record — logging it anyway.
+            </div>
+          )}
+
+          <button
+            onClick={() => setDeductStock(d => !d)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 8, width: '100%', marginBottom: 16,
+              padding: '9px 10px', borderRadius: 8, border: `1px solid ${C.line}`, background: C.panel,
+              color: C.paperDim, fontSize: 12, cursor: 'pointer', textAlign: 'left',
+            }}
+          >
+            <div style={{
+              width: 32, height: 18, borderRadius: 9, position: 'relative', flexShrink: 0,
+              background: deductStock ? C.teal : C.line, transition: 'background 0.15s',
+            }}>
+              <div style={{
+                width: 14, height: 14, borderRadius: '50%', background: C.paper, position: 'absolute', top: 2,
+                left: deductStock ? 16 : 2, transition: 'left 0.15s',
+              }} />
+            </div>
+            Deduct from inventory stock
+          </button>
 
           <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
             {['Cash', 'Transfer', 'POS'].map(p => (
@@ -1987,7 +2114,7 @@ function ReportsView({ sales, inventory, onVoid, apiUrl, token }) {
   const todayInflow = todaySales.reduce((sum, s) => sum + s.qty * s.unitPrice, 0);
   const totalUnitsInStock = inventory.reduce((sum, i) => sum + i.stock, 0);
   const stockValueAtCost = inventory.reduce((sum, i) => sum + i.cost * i.stock, 0);
-  const lowStockCount = inventory.filter(i => i.stock <= i.reorder).length;
+  const lowStockCount = inventory.filter(i => i.stockTracked !== false && i.stock <= i.reorder).length;
 
   return (
     <div>
@@ -2158,7 +2285,31 @@ function ActivityLog({ apiUrl, token }) {
   );
 }
 
-function InsightsView({ sales, inventory }) {
+function InsightsView({ sales, inventory, business, apiUrl, token, onBusinessUpdated }) {
+  const [reportEmail, setReportEmail] = useState('');
+  const [reportSaving, setReportSaving] = useState(false);
+  const [reportError, setReportError] = useState('');
+  const quarterlyEnabled = business?.quarterly_reports_enabled === true;
+
+  const handleToggleQuarterly = async (nextEnabled) => {
+    setReportError('');
+    if (nextEnabled && (!reportEmail.trim() || !reportEmail.includes('@'))) {
+      setReportError('Enter a valid email to receive quarterly reports');
+      return;
+    }
+    setReportSaving(true);
+    try {
+      await apiRequest(apiUrl, '/reports/quarterly-opt-in', {
+        method: 'POST', token, body: { enabled: nextEnabled, email: reportEmail.trim() || undefined },
+      });
+      onBusinessUpdated({ quarterly_reports_enabled: nextEnabled });
+      if (nextEnabled) setReportEmail('');
+    } catch (e) {
+      setReportError(e.message || 'Could not update quarterly report setting');
+    } finally {
+      setReportSaving(false);
+    }
+  };
   const activeSales = sales.filter(s => !s.voided);
   const now = new Date();
   const sevenAgo = new Date(now); sevenAgo.setDate(sevenAgo.getDate() - 7);
@@ -2218,14 +2369,67 @@ function InsightsView({ sales, inventory }) {
 
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 16, color: C.amber }}>
-        <Sparkles size={16} />
-        <span style={{ fontFamily: FONT_DISPLAY, fontSize: 14, textTransform: 'uppercase', letterSpacing: '0.03em' }}>
-          What your notebook never told you
-        </span>
+      <style>{`
+        @media print {
+          body * { visibility: hidden; }
+          #insights-print-area, #insights-print-area * { visibility: visible; }
+          #insights-print-area { position: absolute; left: 0; top: 0; width: 100%; padding: 0; }
+          #insights-print-hide { display: none !important; }
+          #insights-print-area, #insights-print-area * {
+            background: #fff !important; color: #111 !important; border-color: #ccc !important;
+          }
+        }
+      `}</style>
+      <div id="insights-print-area">
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: C.amber }}>
+          <Sparkles size={16} />
+          <span style={{ fontFamily: FONT_DISPLAY, fontSize: 14, textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+            What your notebook never told you
+          </span>
+        </div>
+        <button
+          id="insights-print-hide"
+          onClick={() => window.print()}
+          style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 10px', borderRadius: 7, border: `1px solid ${C.line}`, background: 'transparent', color: C.paperDim, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}
+        ><Printer size={13} /> Print</button>
+      </div>
+
+      {/* Quarterly report opt-in */}
+      <div id="insights-print-hide" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 10, padding: 14, marginBottom: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+          <div style={{ fontSize: 10, color: C.paperDim, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>📧 Quarterly summary report</div>
+          <button
+            onClick={() => handleToggleQuarterly(!quarterlyEnabled)} disabled={reportSaving}
+            style={{
+              width: 42, height: 24, borderRadius: 12, border: 'none', cursor: 'pointer', position: 'relative',
+              background: quarterlyEnabled ? C.teal : C.line, transition: 'background 0.15s', flexShrink: 0,
+            }}
+          >
+            <div style={{
+              width: 18, height: 18, borderRadius: '50%', background: C.paper, position: 'absolute', top: 3,
+              left: quarterlyEnabled ? 21 : 3, transition: 'left 0.15s',
+            }} />
+          </button>
+        </div>
+        <div style={{ fontSize: 12, color: C.paperDim, marginBottom: quarterlyEnabled ? 0 : 8 }}>
+          {quarterlyEnabled
+            ? "You'll get a performance summary by email every 90 days. Turn off any time."
+            : 'Optional — add your email to get a performance summary every 90 days. Off by default, and never required.'}
+        </div>
+        {!quarterlyEnabled && (
+          <>
+            <input
+              value={reportEmail} onChange={e => setReportEmail(e.target.value)} placeholder="Your email address"
+              style={{ width: '100%', padding: '9px 10px', borderRadius: 7, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontSize: 13, marginBottom: 6 }}
+            />
+            {reportError && <div style={{ color: C.red, fontSize: 11 }}>{reportError}</div>}
+          </>
+        )}
       </div>
 
       {/* Capital tied up */}
+
       <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 10, padding: 14, marginBottom: 12 }}>
         <div style={{ fontSize: 11, color: C.paperDim, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Capital sitting on your shelves</div>
         <div style={{ display: 'flex', gap: 20 }}>
@@ -2322,6 +2526,7 @@ function InsightsView({ sales, inventory }) {
           />
         ))}
       </div>
+      </div>
     </div>
   );
 }
@@ -2373,6 +2578,22 @@ function WhatsAppView({ sales, inventory, lowStockItems, business, apiUrl, token
   const [payEmail, setPayEmail] = useState('');
   const [payLoading, setPayLoading] = useState(false);
   const [payError, setPayError] = useState('');
+  const [waToggling, setWaToggling] = useState(false);
+  const waEnabled = business?.whatsapp_enabled !== false;
+
+  const handleToggleWhatsapp = async () => {
+    setWaToggling(true);
+    try {
+      const res = await apiRequest(apiUrl, '/settings/whatsapp', {
+        method: 'POST', token, body: { enabled: !waEnabled },
+      });
+      onBusinessUpdated({ whatsapp_enabled: res.enabled });
+    } catch (e) {
+      // silent — button just stays in its current state, safe default
+    } finally {
+      setWaToggling(false);
+    }
+  };
 
   // Derive catalogue URL from the backend URL — same origin for now
   const catalogueUrl = business?.slug
@@ -2439,6 +2660,30 @@ function WhatsAppView({ sales, inventory, lowStockItems, business, apiUrl, token
         )}
       </div>
 
+      {/* WhatsApp privacy toggle */}
+      <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 10, padding: 14, marginBottom: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+          <div style={{ fontSize: 10, color: C.paperDim, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>🔒 WhatsApp integration</div>
+          <button
+            onClick={handleToggleWhatsapp} disabled={waToggling}
+            style={{
+              width: 42, height: 24, borderRadius: 12, border: 'none', cursor: 'pointer', position: 'relative',
+              background: waEnabled ? C.teal : C.line, transition: 'background 0.15s', flexShrink: 0,
+            }}
+          >
+            <div style={{
+              width: 18, height: 18, borderRadius: '50%', background: C.paper, position: 'absolute', top: 3,
+              left: waEnabled ? 21 : 3, transition: 'left 0.15s',
+            }} />
+          </button>
+        </div>
+        <div style={{ fontSize: 12, color: C.paperDim }}>
+          {waEnabled
+            ? "TodayBread sends your welcome message and daily 9 PM summary to WhatsApp. Turn off if you'd rather keep this private — nothing about your business gets sent anywhere."
+            : 'WhatsApp messages from TodayBread are off. You can still tap the buttons below to send manually.'}
+        </div>
+      </div>
+
       {/* Catalogue link section */}
       <div style={{ background: C.panel, border: `1px solid ${C.amber}44`, borderRadius: 10, padding: 14, marginBottom: 16 }}>
         <div style={{ fontSize: 10, color: C.amber, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8, fontWeight: 700 }}>🌐 Your public catalogue</div>
@@ -2477,16 +2722,20 @@ function WhatsAppView({ sales, inventory, lowStockItems, business, apiUrl, token
         </div>
       </div>
 
-      <a
-        href={waLink(summaryText)} target="_blank" rel="noopener noreferrer"
-        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, width: '100%', padding: '12px 0', borderRadius: 8, background: C.amber, color: C.ink, fontWeight: 700, fontSize: 14, textDecoration: 'none', marginBottom: 16 }}
-      ><MessageCircle size={16} /> Send today's summary on WhatsApp</a>
+      {waEnabled && (
+        <>
+          <a
+            href={waLink(summaryText)} target="_blank" rel="noopener noreferrer"
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, width: '100%', padding: '12px 0', borderRadius: 8, background: C.amber, color: C.ink, fontWeight: 700, fontSize: 14, textDecoration: 'none', marginBottom: 16 }}
+          ><MessageCircle size={16} /> Send today's summary on WhatsApp</a>
 
-      <a
-        href={waLink(`Hi TodayBread! This is ${business?.name || 'a TodayBread user'} — I have a question.`, TODAYBREAD_WHATSAPP_NUMBER)}
-        target="_blank" rel="noopener noreferrer"
-        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, width: '100%', padding: '11px 0', borderRadius: 8, border: `1px solid ${C.line}`, background: 'transparent', color: C.paperDim, fontWeight: 600, fontSize: 13, textDecoration: 'none' }}
-      ><MessageCircle size={14} /> Message TodayBread support</a>
+          <a
+            href={waLink(`Hi TodayBread! This is ${business?.name || 'a TodayBread user'} — I have a question.`, TODAYBREAD_WHATSAPP_NUMBER)}
+            target="_blank" rel="noopener noreferrer"
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, width: '100%', padding: '11px 0', borderRadius: 8, border: `1px solid ${C.line}`, background: 'transparent', color: C.paperDim, fontWeight: 600, fontSize: 13, textDecoration: 'none' }}
+          ><MessageCircle size={14} /> Message TodayBread support</a>
+        </>
+      )}
 
       <div style={{ marginTop: 16, fontSize: 11, color: C.paperDim, lineHeight: 1.6 }}>
         These open WhatsApp with your message ready to go — just tap send. Automatic delivery (no tapping required) is coming once WhatsApp Business verification is complete.
@@ -2650,14 +2899,66 @@ function readFileAsBase64(file) {
   });
 }
 
+// Phone cameras produce multi-megabyte photos — way more resolution than
+// handwritten text needs and way more bytes than necessary to upload over a
+// patchy connection. This downsizes to a max dimension and re-encodes as
+// JPEG at a modest quality via <canvas>, landing most ledger photos in the
+// tens-to-low-hundreds of KB rather than several MB, before it ever goes to
+// Gemini. Runs entirely client-side — nothing about the image touches the
+// network until this has already shrunk it.
+function compressImageForUpload(file, { maxDimension = 1600, quality = 0.72 } = {}) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const objectUrl = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      let { width, height } = img;
+      if (width > maxDimension || height > maxDimension) {
+        const scale = maxDimension / Math.max(width, height);
+        width = Math.round(width * scale);
+        height = Math.round(height * scale);
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, width, height);
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) return reject(new Error('Could not compress the photo'));
+          const reader = new FileReader();
+          reader.onload = () => {
+            const result = reader.result;
+            const commaIdx = result.indexOf(',');
+            resolve({
+              base64: commaIdx >= 0 ? result.slice(commaIdx + 1) : result,
+              mediaType: 'image/jpeg',
+              sizeKb: Math.round(blob.size / 1024),
+            });
+          };
+          reader.onerror = () => reject(new Error('Could not read the compressed photo'));
+          reader.readAsDataURL(blob);
+        },
+        'image/jpeg',
+        quality
+      );
+    };
+    img.onerror = () => { URL.revokeObjectURL(objectUrl); reject(new Error('Could not load the selected photo')); };
+    img.src = objectUrl;
+  });
+}
+
 function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onAddStock, onReceiveStock }) {
   const [mode, setMode] = useState('sales'); // sales | stock
   const [inputMode, setInputMode] = useState('text'); // text | photo
   const [raw, setRaw] = useState('');
   const [photoFile, setPhotoFile] = useState(null);
   const [photoPreview, setPhotoPreview] = useState(null);
+  const [compressedInfo, setCompressedInfo] = useState(null); // { base64, mediaType, sizeKb }
+  const [compressing, setCompressing] = useState(false);
   const [parsed, setParsed] = useState(null);
   const [payment, setPayment] = useState('Cash');
+  const [deductStock, setDeductStock] = useState(true);
   const [parsing, setParsing] = useState(false);
   const [committing, setCommitting] = useState(false);
   const [done, setDone] = useState(false);
@@ -2665,31 +2966,44 @@ function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onA
 
   const categoryNames = (categories || []).map(c => c.category).sort();
 
-  const handlePhotoSelect = (e) => {
+  const handlePhotoSelect = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setPhotoFile(file);
     setPhotoPreview(URL.createObjectURL(file));
     setError('');
+    setCompressedInfo(null);
+    setCompressing(true);
+    try {
+      const info = await compressImageForUpload(file);
+      setCompressedInfo(info);
+    } catch (err) {
+      setError(err.message || 'Could not process that photo — try another one');
+      setPhotoFile(null);
+    } finally {
+      setCompressing(false);
+    }
   };
 
   const clearPhoto = () => {
     setPhotoFile(null);
     if (photoPreview) URL.revokeObjectURL(photoPreview);
     setPhotoPreview(null);
+    setCompressedInfo(null);
   };
 
   const handleParse = async () => {
     setError('');
     if (inputMode === 'text' && !raw.trim()) return setError('Paste some ledger text first');
-    if (inputMode === 'photo' && !photoFile) return setError('Choose a photo first');
+    if (inputMode === 'photo' && !compressedInfo) return setError('Choose a photo first');
 
     setParsing(true);
     try {
       let body;
       if (inputMode === 'photo') {
-        const imageBase64 = await readFileAsBase64(photoFile);
-        body = { imageBase64, mediaType: photoFile.type || 'image/jpeg', mode };
+        // Already compressed client-side at selection time — this is the
+        // small JPEG, not the original multi-MB camera capture.
+        body = { imageBase64: compressedInfo.base64, mediaType: compressedInfo.mediaType, mode };
       } else {
         body = { text: raw, mode };
       }
@@ -2765,11 +3079,34 @@ function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onA
           const normName = row.newDraft.name.trim().toLowerCase();
           const dupe = createdThisBatch.find(c => c.name.trim().toLowerCase() === normName);
           if (dupe) {
-            const updated = await onAddStock({ ...dupe, stock: dupe.stock + row.overrideQty });
-            if (updated) createdThisBatch[createdThisBatch.indexOf(dupe)] = updated;
+            if (mode === 'sales') {
+              await onRecordSales(dupe.dbId, row.overrideQty, payment, deductStock);
+            } else {
+              const updated = await onAddStock({ ...dupe, stock: dupe.stock + row.overrideQty });
+              if (updated) createdThisBatch[createdThisBatch.indexOf(dupe)] = updated;
+            }
+          } else if (mode === 'sales') {
+            // A sale for a product that isn't in inventory yet, straight off
+            // a photo of the sales book — this is the core "just snap it"
+            // case: create the product itself (no baseline stock, since we
+            // genuinely don't know how much was on hand — this is the first
+            // the system is learning about it), then log the sale through
+            // the same non-blocking path as any other sale, which is free
+            // to take stock negative or skip deduction per the toggle above.
+            const created = await onAddStock({
+              isNew: true, name: row.newDraft.name.trim(), category: row.newDraft.category || '',
+              price: Number(row.newDraft.price) || 0, cost: Number(row.newDraft.cost) || 0, stock: 0,
+              warehouseStock: 0, reorder: 0, brand: '', size: '', origin: '',
+              expiryDate: row.newDraft.expiryDate || '', batchNumber: row.newDraft.batchNumber || '',
+              stockTracked: false,
+            });
+            if (created) {
+              createdThisBatch.push(created);
+              await onRecordSales(created.dbId, row.overrideQty, payment, deductStock);
+            }
           } else {
-            // Stock Arrival only (the button is hidden in Recording Sales mode) —
-            // create the item fresh, with initial stock set to the parsed quantity.
+            // Stock Arrival — the parsed quantity IS what physically arrived,
+            // so it becomes the item's real initial stock straight away.
             const created = await onAddStock({
               isNew: true, name: row.newDraft.name.trim(), category: row.newDraft.category || '',
               price: Number(row.newDraft.price) || 0, cost: Number(row.newDraft.cost) || 0, stock: row.overrideQty,
@@ -2779,7 +3116,7 @@ function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onA
             if (created) createdThisBatch.push(created);
           }
         } else if (mode === 'sales') {
-          await onRecordSales(row.match.item.id, row.overrideQty, payment);
+          await onRecordSales(row.match.item.id, row.overrideQty, payment, deductStock);
         } else {
           // Stock Arrival, matched existing item — receive-stock recalculates
           // cost as a weighted average if this delivery's price differs from
@@ -2815,8 +3152,8 @@ function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onA
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
         <ClipboardList size={16} color={C.amber} />
         <div>
-          <div style={{ fontFamily: FONT_DISPLAY, fontSize: 15, textTransform: 'uppercase', letterSpacing: '0.03em' }}>Notebook</div>
-          <div style={{ fontSize: 11, color: C.paperDim, marginTop: 2 }}>Paste text from Google Lens, or upload a photo of the page directly</div>
+          <div style={{ fontFamily: FONT_DISPLAY, fontSize: 15, textTransform: 'uppercase', letterSpacing: '0.03em' }}>Snapshot</div>
+          <div style={{ fontSize: 11, color: C.paperDim, marginTop: 2 }}>Photograph the sales book, or paste text from Google Lens — items and math are extracted automatically</div>
         </div>
       </div>
 
@@ -2845,15 +3182,28 @@ function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onA
           ) : (
             <div>
               {!photoPreview ? (
-                <label style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, minHeight: 200, borderRadius: 8, border: `1px dashed ${C.line}`, background: C.panel, color: C.paperDim, cursor: 'pointer', fontSize: 13 }}>
-                  <Camera size={26} style={{ opacity: 0.6 }} />
-                  Tap to take or choose a photo of your ledger page
-                  <input type="file" accept="image/*" onChange={handlePhotoSelect} style={{ display: 'none' }} />
-                </label>
+                <div style={{ display: 'flex', gap: 8, minHeight: 200 }}>
+                  <label style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 8, border: `1px dashed ${C.line}`, background: C.panel, color: C.paperDim, cursor: 'pointer', fontSize: 12.5, textAlign: 'center', padding: '0 10px' }}>
+                    <Camera size={24} style={{ opacity: 0.6 }} />
+                    Take a photo now
+                    <input type="file" accept="image/*" capture="environment" onChange={handlePhotoSelect} style={{ display: 'none' }} />
+                  </label>
+                  <label style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 8, border: `1px dashed ${C.line}`, background: C.panel, color: C.paperDim, cursor: 'pointer', fontSize: 12.5, textAlign: 'center', padding: '0 10px' }}>
+                    <ImageIcon size={24} style={{ opacity: 0.6 }} />
+                    Choose from gallery
+                    <input type="file" accept="image/*" onChange={handlePhotoSelect} style={{ display: 'none' }} />
+                  </label>
+                </div>
               ) : (
                 <div style={{ position: 'relative' }}>
                   <img src={photoPreview} alt="Ledger page" style={{ width: '100%', maxHeight: 320, objectFit: 'contain', borderRadius: 8, border: `1px solid ${C.line}`, background: C.ink }} />
                   <button onClick={clearPhoto} style={{ position: 'absolute', top: 8, right: 8, background: 'rgba(0,0,0,0.6)', border: 'none', borderRadius: 6, color: '#fff', padding: '5px 10px', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>Remove</button>
+                  <div style={{
+                    position: 'absolute', bottom: 8, left: 8, background: 'rgba(0,0,0,0.65)', borderRadius: 6,
+                    padding: '4px 8px', fontSize: 10.5, color: compressing ? C.paperDim : C.teal, fontFamily: FONT_MONO,
+                  }}>
+                    {compressing ? 'Compressing…' : compressedInfo ? `${compressedInfo.sizeKb} KB ready to upload` : ''}
+                  </div>
                 </div>
               )}
             </div>
@@ -2863,25 +3213,38 @@ function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onA
 
           <button
             onClick={handleParse}
-            disabled={parsing || (inputMode === 'text' ? !raw.trim() : !photoFile)}
+            disabled={parsing || compressing || (inputMode === 'text' ? !raw.trim() : !compressedInfo)}
             style={{
               width: '100%', marginTop: 12, padding: '12px 0', borderRadius: 8, border: 'none',
-              background: parsing ? C.line : ((inputMode === 'text' ? raw.trim() : photoFile) ? C.amber : C.line),
-              color: (inputMode === 'text' ? raw.trim() : photoFile) ? C.ink : C.paperDim,
+              background: parsing ? C.line : ((inputMode === 'text' ? raw.trim() : compressedInfo) ? C.amber : C.line),
+              color: (inputMode === 'text' ? raw.trim() : compressedInfo) ? C.ink : C.paperDim,
               fontFamily: FONT_BODY, fontWeight: 700, fontSize: 14,
-              cursor: (inputMode === 'text' ? raw.trim() : photoFile) ? 'pointer' : 'default',
+              cursor: (inputMode === 'text' ? raw.trim() : compressedInfo) ? 'pointer' : 'default',
             }}
           >
-            {parsing ? 'Reading entries…' : 'Parse entries'}
+            {parsing ? 'Reading entries…' : compressing ? 'Preparing photo…' : 'Parse entries'}
           </button>
         </>
       )}
 
       {parsed && !done && (
-        <>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-            <div style={{ fontSize: 12, color: C.paperDim }}>{parsed.length} line{parsed.length !== 1 ? 's' : ''} parsed — review before confirming</div>
+        <div
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)', zIndex: 30,
+            display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
+          }}
+        >
+          <div style={{
+            background: C.ink, width: '100%', maxWidth: 720, maxHeight: '92vh', overflowY: 'auto',
+            borderRadius: '16px 16px 0 0', border: `1px solid ${C.line}`, borderBottom: 'none',
+            padding: '16px 16px 20px',
+          }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+            <div style={{ fontFamily: FONT_DISPLAY, fontSize: 15, textTransform: 'uppercase', letterSpacing: '0.03em', color: C.paper }}>Review before saving</div>
             <button onClick={() => setParsed(null)} style={{ fontSize: 11, color: C.paperDim, background: 'none', border: 'none', cursor: 'pointer' }}>← Start over</button>
+          </div>
+          <div style={{ fontSize: 12, color: C.paperDim, marginBottom: 12 }}>
+            {parsed.length} line{parsed.length !== 1 ? 's' : ''} extracted — nothing is saved to your ledger until you confirm below. Check names, quantities and prices carefully.
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
@@ -2922,7 +3285,7 @@ function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onA
                         />
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <span style={{ fontSize: 11, color: C.paperDim }}>Initial stock:</span>
+                        <span style={{ fontSize: 11, color: C.paperDim }}>{mode === 'sales' ? 'Qty sold:' : 'Initial stock:'}</span>
                         <input type="number" value={row.overrideQty} min={1} onChange={e => updateQty(idx, e.target.value)} style={{ width: 52, textAlign: 'center', padding: '5px 6px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_MONO, fontSize: 14, fontWeight: 700 }} />
                         <button onClick={() => cancelCreating(idx)} style={{ marginLeft: 'auto', padding: '5px 10px', borderRadius: 6, border: `1px solid ${C.line}`, background: 'transparent', color: C.paperDim, fontWeight: 600, fontSize: 11, cursor: 'pointer' }}>Cancel</button>
                       </div>
@@ -2959,12 +3322,10 @@ function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onA
                           <option value="">— pick an existing item —</option>
                           {inventory.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
                         </select>
-                        {mode === 'stock' && (
-                          <button onClick={() => startCreating(idx)} style={{ padding: '5px 10px', borderRadius: 6, border: `1px dashed ${C.amber}66`, background: `${C.amber}14`, color: C.amber, fontWeight: 700, fontSize: 11, cursor: 'pointer', whiteSpace: 'nowrap' }}>+ Create as new item</button>
-                        )}
+                        <button onClick={() => startCreating(idx)} style={{ padding: '5px 10px', borderRadius: 6, border: `1px dashed ${C.amber}66`, background: `${C.amber}14`, color: C.amber, fontWeight: 700, fontSize: 11, cursor: 'pointer', whiteSpace: 'nowrap' }}>+ Create as new item</button>
                       </div>
                       {mode === 'sales' && !row.match && (
-                        <div style={{ fontSize: 10, color: C.paperDim, fontStyle: 'italic', marginTop: 6 }}>Not in your inventory yet — add it via Stock Arrival first.</div>
+                        <div style={{ fontSize: 10, color: C.paperDim, fontStyle: 'italic', marginTop: 6 }}>Not in your inventory yet — sell it anyway, or create it from this line.</div>
                       )}
                     </>
                   )}
@@ -2985,12 +3346,35 @@ function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onA
             </div>
           )}
 
+          {mode === 'sales' && (
+            <button
+              onClick={() => setDeductStock(d => !d)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 8, width: '100%', marginBottom: 14,
+                padding: '9px 10px', borderRadius: 8, border: `1px solid ${C.line}`, background: C.panel,
+                color: C.paperDim, fontSize: 12, cursor: 'pointer', textAlign: 'left',
+              }}
+            >
+              <div style={{
+                width: 32, height: 18, borderRadius: 9, position: 'relative', flexShrink: 0,
+                background: deductStock ? C.teal : C.line, transition: 'background 0.15s',
+              }}>
+                <div style={{
+                  width: 14, height: 14, borderRadius: '50%', background: C.paper, position: 'absolute', top: 2,
+                  left: deductStock ? 16 : 2, transition: 'left 0.15s',
+                }} />
+              </div>
+              Deduct these quantities from inventory stock
+            </button>
+          )}
+
           {error && <div style={{ color: C.red, fontSize: 12, marginBottom: 10 }}>{error}</div>}
 
           <button onClick={handleCommit} disabled={committing || readyCount === 0} style={{ width: '100%', padding: '13px 0', borderRadius: 8, border: 'none', background: readyCount > 0 ? C.amber : C.line, color: readyCount > 0 ? C.ink : C.paperDim, fontFamily: FONT_BODY, fontWeight: 700, fontSize: 14, cursor: readyCount > 0 ? 'pointer' : 'default' }}>
-            {committing ? 'Recording…' : `Record ${readyCount} confirmed entr${readyCount === 1 ? 'y' : 'ies'}`}
+            {committing ? 'Saving…' : `Confirm & Save to Ledger (${readyCount})`}
           </button>
-        </>
+          </div>
+        </div>
       )}
 
       {done && (
