@@ -2575,7 +2575,6 @@ function WhatsAppView({ sales, inventory, lowStockItems, business, apiUrl, token
   const dateStr = new Date().toLocaleDateString('en-NG', { weekday: 'long', day: 'numeric', month: 'long' });
   const publicCount = inventory.filter(i => i.isPublic).length;
 
-  const [payEmail, setPayEmail] = useState('');
   const [payLoading, setPayLoading] = useState(false);
   const [payError, setPayError] = useState('');
   const [waToggling, setWaToggling] = useState(false);
@@ -2612,12 +2611,9 @@ function WhatsAppView({ sales, inventory, lowStockItems, business, apiUrl, token
     : '';
 
   const handleSetupPayment = async () => {
-    if (!payEmail.trim() || !payEmail.includes('@')) return setPayError('Enter a valid email address');
     setPayLoading(true); setPayError('');
     try {
-      const res = await apiRequest(apiUrl, '/subscription/setup-payment-account', {
-        method: 'POST', token, body: { email: payEmail.trim() },
-      });
+      const res = await apiRequest(apiUrl, '/subscription/setup-payment-account', { method: 'POST', token });
       onBusinessUpdated({ dva_account_number: res.accountNumber, dva_account_name: res.accountName, dva_bank_name: res.bankName });
     } catch (e) {
       setPayError(e.message || 'Could not set up payment account');
@@ -2646,11 +2642,7 @@ function WhatsAppView({ sales, inventory, lowStockItems, business, apiUrl, token
           </>
         ) : (
           <>
-            <div style={{ fontSize: 12, color: C.paperDim, marginBottom: 10 }}>Set up a dedicated account number for your subscription — transfer only, no card needed. One-time setup.</div>
-            <input
-              value={payEmail} onChange={e => setPayEmail(e.target.value)} placeholder="Your email address"
-              style={{ width: '100%', padding: '9px 10px', borderRadius: 7, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontSize: 13, marginBottom: 8 }}
-            />
+            <div style={{ fontSize: 12, color: C.paperDim, marginBottom: 10 }}>Set up a dedicated account number for your subscription — transfer only, no card needed, nothing to type.</div>
             {payError && <div style={{ color: C.red, fontSize: 11, marginBottom: 8 }}>{payError}</div>}
             <button
               onClick={handleSetupPayment} disabled={payLoading}
@@ -2906,7 +2898,7 @@ function readFileAsBase64(file) {
 // tens-to-low-hundreds of KB rather than several MB, before it ever goes to
 // Gemini. Runs entirely client-side — nothing about the image touches the
 // network until this has already shrunk it.
-function compressImageForUpload(file, { maxDimension = 1600, quality = 0.72 } = {}) {
+function compressImageForUpload(file, { maxDimension = 2200, quality = 0.85 } = {}) {
   return new Promise((resolve, reject) => {
     const img = new Image();
     const objectUrl = URL.createObjectURL(file);
@@ -3045,7 +3037,13 @@ function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onA
       setParsed(results);
       setDone(false);
     } catch (e) {
-      setError((e.message || 'Could not parse the ledger entry') + (e.debug ? ` — details: ${e.debug}` : ''));
+      // e.debug (present on OCR errors) is diagnostic detail for logs, not
+      // for the screen — surfacing it here is what used to show the raw
+      // partial/truncated model output right in the UI. The backend's own
+      // e.message is already the clean, user-facing copy for every case
+      // (busy, truncated, unparseable, etc.) — show that and nothing else.
+      setError(e.message || 'Could not parse the ledger entry');
+      if (e.debug) console.warn('[ocr] parse error detail:', e.debug);
     } finally {
       setParsing(false);
     }
