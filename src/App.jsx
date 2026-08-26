@@ -1087,6 +1087,8 @@ function LegalModal({ title, children, onClose }) {
 function TermsModal({ onClose }) {
   return (
     <LegalModal title="Terms of Service" onClose={onClose}>
+      <p style={{ marginBottom: 12 }}>TodayBread is operated by TodaysConnection Lagos Hub.</p>
+
       <p style={{ color: C.paper, fontWeight: 600, marginBottom: 4 }}>What TodayBread is</p>
       <p style={{ marginBottom: 12 }}>TodayBread is an inventory and sales management tool for small businesses. You use it to track stock, record sales, and manage your business data. It is provided as-is, and we work continuously to keep it reliable, but we don't guarantee it will be uninterrupted or error-free.</p>
 
@@ -2594,9 +2596,12 @@ function WhatsAppView({ sales, inventory, lowStockItems, business, apiUrl, token
     }
   };
 
-  // Derive catalogue URL from the backend URL — same origin for now
+  // /shop/:slug is a FRONTEND route (handled by AppEntry.jsx), not a backend
+  // one — window.location.origin is always this app's own real domain,
+  // whatever it's being served from today. That also means switching to the
+  // .com.ng domain later needs no code change here at all.
   const catalogueUrl = business?.slug
-    ? `${apiUrl?.replace('/api', '') || ''}/catalogue/${business.slug}`
+    ? `${window.location.origin}/shop/${business.slug}`
     : null;
 
   const summaryText =
@@ -2687,7 +2692,7 @@ function WhatsAppView({ sales, inventory, lowStockItems, business, apiUrl, token
           <>
             <div style={{ fontSize: 12, color: C.paperDim, marginBottom: 10 }}>{publicCount} item{publicCount !== 1 ? 's' : ''} visible to customers</div>
             <div style={{ background: C.panel2, borderRadius: 7, padding: '10px 12px', fontFamily: FONT_MONO, fontSize: 12, color: C.teal, wordBreak: 'break-all', marginBottom: 10 }}>
-              {catalogueUrl || `${apiUrl}/catalogue/${business?.slug || 'your-shop'}`}
+              {catalogueUrl || `${window.location.origin}/shop/${business?.slug || 'your-shop'}`}
             </div>
             <a
               href={waLink(shareCatalogueText)} target="_blank" rel="noopener noreferrer"
