@@ -4,7 +4,7 @@ import {
   RefreshCw, MessageCircle, Lock, Clock, ChevronRight, Plus, Minus,
   ShoppingCart, BarChart3, Wallet, Boxes, Wrench, Link2, Check, Sparkles, ArrowUp, ArrowDown, Timer, ArchiveX, Award,
   Wifi, WifiOff, LogOut, Server, CloudUpload, AlertCircle, Users, ClipboardList, Camera, Type, Printer,
-  Image as ImageIcon
+  Image as ImageIcon, X
 } from 'lucide-react';
 // New dependency — run: npm install @simplewebauthn/browser
 import { startRegistration, startAuthentication, browserSupportsWebAuthn } from '@simplewebauthn/browser';
@@ -575,6 +575,8 @@ export default function TodayBread() {
 
       <Header business={auth.business} onLogout={handleLogout} />
 
+      {role === 'owner' && <MilestoneBanner business={auth.business} sales={sales} inventory={inventory} />}
+
       {role === 'owner' && <SubscriptionBanner business={auth.business} />}
 
       {role === 'owner' && (
@@ -991,7 +993,89 @@ function TickerBar({ fmtTime, rates, rateLoading, rateError, onRefresh }) {
   );
 }
 
+function daysSince(dateStr) {
+  if (!dateStr) return null;
+  const start = new Date(dateStr);
+  const now = new Date();
+  const diffMs = now - start;
+  return Math.max(1, Math.floor(diffMs / 86400000) + 1); // day of signup itself counts as Day 1
+}
+
+// Small, tasteful progress moments — not gamified badges everywhere, just a
+// one-time acknowledgment the first time each genuinely happens. Computed
+// entirely from data already in memory (no new backend/DB work), and
+// "seen" state lives in localStorage so each milestone surfaces exactly
+// once per device rather than needing server-side tracking for something
+// this lightweight.
+function MilestoneBanner({ business, sales, inventory }) {
+  const [dismissedThisSession, setDismissedThisSession] = useState(false);
+
+  const milestone = useMemo(() => {
+    if (!business?.id) return null;
+    const seenKey = (id) => `todaybread-milestone-${business.id}-${id}`;
+    const hasSeen = (id) => localStorage.getItem(seenKey(id)) === '1';
+
+    const activeSales = sales.filter(s => !s.voided);
+    const distinctSaleDays = new Set(activeSales.map(s => new Date(s.timestamp).toDateString())).size;
+    const tenureDays = daysSince(business.created_at) || 0;
+    const catalogueLive = !!business.slug && inventory.some(i => i.isPublic);
+
+    // Checked in ascending order of how long they take to reach — the
+    // banner shows the first (most recent) one that's newly true.
+    const candidates = [
+      {
+        id: 'first-sale', met: activeSales.length >= 1,
+        title: 'First sale recorded! 🎉',
+        body: "That's the first entry in what's about to become your business's full history.",
+      },
+      {
+        id: 'week-recorded', met: distinctSaleDays >= 7,
+        title: "7 days recorded",
+        body: 'A full week of sales is now in your history — patterns are starting to show in Best Sellers.',
+      },
+      {
+        id: 'thirty-days', met: tenureDays >= 30 && activeSales.length >= 1,
+        title: '30 days with TodayBread',
+        body: "A month of building your business's record, day by day.",
+      },
+      {
+        id: 'catalogue-live', met: catalogueLive,
+        title: 'Your shop is live! 🌍',
+        body: 'Customers can now see your public catalogue — share the link from Connect & Subscription.',
+      },
+    ];
+
+    const reached = candidates.filter(c => c.met && !hasSeen(c.id));
+    return reached[reached.length - 1] || null; // most recently unlocked
+  }, [business?.id, business?.created_at, business?.slug, sales, inventory]);
+
+  if (!milestone || dismissedThisSession) return null;
+
+  const dismiss = () => {
+    localStorage.setItem(`todaybread-milestone-${business.id}-${milestone.id}`, '1');
+    setDismissedThisSession(true);
+  };
+
+  return (
+    <div style={{
+      margin: '0 16px 12px', maxWidth: 720 - 32, marginLeft: 'auto', marginRight: 'auto',
+      background: `linear-gradient(135deg, ${C.teal}22, ${C.amber}18)`, border: `1px solid ${C.teal}44`,
+      borderRadius: 12, padding: 14, display: 'flex', alignItems: 'flex-start', gap: 10,
+    }}>
+      <Sparkles size={18} color={C.amber} style={{ flexShrink: 0, marginTop: 1 }} />
+      <div style={{ flex: 1 }}>
+        <div style={{ fontFamily: FONT_DISPLAY, fontSize: 14, color: C.paper, marginBottom: 3 }}>{milestone.title}</div>
+        <div style={{ fontSize: 12, color: C.paperDim, lineHeight: 1.4 }}>{milestone.body}</div>
+      </div>
+      <button onClick={dismiss} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, flexShrink: 0 }}>
+        <X size={16} color={C.paperDim} />
+      </button>
+    </div>
+  );
+}
+
 function Header({ business, onLogout }) {
+  const dayCount = daysSince(business?.created_at);
   return (
     <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', padding: '16px 16px 12px', maxWidth: 720, margin: '0 auto' }}>
       <div>
@@ -1011,6 +1095,16 @@ function Header({ business, onLogout }) {
         <div style={{ fontSize: 11, color: C.paperDim, marginTop: 3, display: 'flex', alignItems: 'center', gap: 5 }}>
           <Server size={11} /> Connected to live backend
         </div>
+        {dayCount !== null && (
+          <div style={{
+            display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 8, padding: '4px 10px',
+            borderRadius: 20, background: `${C.amber}18`, border: `1px solid ${C.amber}44`,
+          }}>
+            <TrendingUp size={11} color={C.amber} />
+            <span style={{ fontFamily: FONT_MONO, fontSize: 11, fontWeight: 700, color: C.amber }}>Day {dayCount.toLocaleString()}</span>
+            <span style={{ fontSize: 10.5, color: C.paperDim }}>building with TodayBread</span>
+          </div>
+        )}
       </div>
       <button
         onClick={onLogout}
@@ -2118,6 +2212,13 @@ function ReportsView({ sales, inventory, onVoid, apiUrl, token }) {
   const stockValueAtCost = inventory.reduce((sum, i) => sum + i.cost * i.stock, 0);
   const lowStockCount = inventory.filter(i => i.stockTracked !== false && i.stock <= i.reorder).length;
 
+  // Adaptive: a business running purely on Snap (no manually tracked stock)
+  // gets metrics that are never zero for them, instead of three inventory-
+  // value numbers that only ever read 0/₦0 when nothing's being tracked.
+  const hasTrackedInventory = inventory.some(i => i.stockTracked !== false);
+  const salesLast7Days = filterSalesByRange(sales, '7d').filter(s => !s.voided).length;
+  const totalSalesAllTime = sales.filter(s => !s.voided).length;
+
   return (
     <div>
       <div style={{
@@ -2138,18 +2239,36 @@ function ReportsView({ sales, inventory, onVoid, apiUrl, token }) {
             <div style={{ fontSize: 11, color: C.paperDim, marginTop: 2 }}>cash in today</div>
           </div>
           <div style={{ width: 1, background: C.line }} />
-          <div>
-            <div style={{ fontFamily: FONT_MONO, fontSize: 22, fontWeight: 700 }}>{totalUnitsInStock.toLocaleString()}</div>
-            <div style={{ fontSize: 11, color: C.paperDim, marginTop: 2 }}>units on shelf</div>
-          </div>
-          <div style={{ width: 1, background: C.line }} />
-          <div>
-            <div style={{ fontFamily: FONT_MONO, fontSize: 22, fontWeight: 700, color: lowStockCount > 0 ? C.red : C.paper }}>{lowStockCount}</div>
-            <div style={{ fontSize: 11, color: C.paperDim, marginTop: 2 }}>items low on stock</div>
-          </div>
+          {hasTrackedInventory ? (
+            <>
+              <div>
+                <div style={{ fontFamily: FONT_MONO, fontSize: 22, fontWeight: 700 }}>{totalUnitsInStock.toLocaleString()}</div>
+                <div style={{ fontSize: 11, color: C.paperDim, marginTop: 2 }}>units on shelf</div>
+              </div>
+              <div style={{ width: 1, background: C.line }} />
+              <div>
+                <div style={{ fontFamily: FONT_MONO, fontSize: 22, fontWeight: 700, color: lowStockCount > 0 ? C.red : C.paper }}>{lowStockCount}</div>
+                <div style={{ fontSize: 11, color: C.paperDim, marginTop: 2 }}>items low on stock</div>
+              </div>
+            </>
+          ) : (
+            <>
+              <div>
+                <div style={{ fontFamily: FONT_MONO, fontSize: 22, fontWeight: 700 }}>{inventory.length.toLocaleString()}</div>
+                <div style={{ fontSize: 11, color: C.paperDim, marginTop: 2 }}>products logged</div>
+              </div>
+              <div style={{ width: 1, background: C.line }} />
+              <div>
+                <div style={{ fontFamily: FONT_MONO, fontSize: 22, fontWeight: 700, color: salesLast7Days > 0 ? C.teal : C.paperDim }}>{salesLast7Days.toLocaleString()}</div>
+                <div style={{ fontSize: 11, color: C.paperDim, marginTop: 2 }}>entries this week</div>
+              </div>
+            </>
+          )}
         </div>
         <div style={{ fontSize: 11, color: C.paperDim, marginTop: 10, paddingTop: 10, borderTop: `1px solid ${C.line}` }}>
-          {naira(stockValueAtCost)} worth of stock currently sitting in the shop, at cost
+          {hasTrackedInventory
+            ? `${naira(stockValueAtCost)} worth of stock currently sitting in the shop, at cost`
+            : `${totalSalesAllTime.toLocaleString()} sale${totalSalesAllTime === 1 ? '' : 's'} logged since you started`}
         </div>
       </div>
 
@@ -3454,6 +3573,29 @@ function AdminDashboard({ apiUrl, token, onLogout }) {
     }
   };
 
+  const [confirmingDelete, setConfirmingDelete] = useState(null); // business id pending a second tap to confirm
+  const [deletingBusiness, setDeletingBusiness] = useState(null);
+
+  const handleDeleteBusiness = async (businessId) => {
+    if (confirmingDelete !== businessId) {
+      // First tap just arms it — nothing destructive happens until the
+      // second tap on the now-red "Confirm delete" button.
+      setConfirmingDelete(businessId);
+      return;
+    }
+    setDeletingBusiness(businessId);
+    try {
+      await apiRequest(apiUrl, `/admin/businesses/${businessId}`, { method: 'DELETE', token });
+      setBusinesses(bs => bs.filter(b => b.id !== businessId));
+      if (selected === businessId) { setSelected(null); setDetail(null); }
+    } catch (e) {
+      alert(`Could not delete business: ${e.message}`);
+    } finally {
+      setDeletingBusiness(null);
+      setConfirmingDelete(null);
+    }
+  };
+
   const subscriptionStatus = (b) => {
     const now = new Date();
     const trialEndsAt = b.trial_ends_at ? new Date(b.trial_ends_at) : null;
@@ -3650,12 +3792,35 @@ function AdminDashboard({ apiUrl, token, onLogout }) {
                                 {detail.business.next_due_date ? new Date(detail.business.next_due_date).toLocaleDateString('en-NG', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}
                               </span>
                             </div>
-                            <button
-                              onClick={() => handleMarkPaid(b.id)}
-                              disabled={markingPaid === b.id}
-                              style={{ padding: '6px 12px', borderRadius: 6, border: 'none', background: C.teal, color: '#fff', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}
-                            >{markingPaid === b.id ? 'Marking…' : 'Mark as paid'}</button>
+                            <div style={{ display: 'flex', gap: 8 }}>
+                              <button
+                                onClick={() => handleMarkPaid(b.id)}
+                                disabled={markingPaid === b.id}
+                                style={{ padding: '6px 12px', borderRadius: 6, border: 'none', background: C.teal, color: '#fff', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}
+                              >{markingPaid === b.id ? 'Marking…' : 'Mark as paid'}</button>
+                              <button
+                                onClick={() => handleDeleteBusiness(b.id)}
+                                disabled={deletingBusiness === b.id}
+                                style={{
+                                  padding: '6px 12px', borderRadius: 6, fontWeight: 700, fontSize: 12, cursor: 'pointer',
+                                  border: `1px solid ${C.red}`,
+                                  background: confirmingDelete === b.id ? C.red : 'transparent',
+                                  color: confirmingDelete === b.id ? '#fff' : C.red,
+                                }}
+                              >{deletingBusiness === b.id ? 'Deleting…' : confirmingDelete === b.id ? 'Confirm delete' : 'Delete business'}</button>
+                              {confirmingDelete === b.id && deletingBusiness !== b.id && (
+                                <button
+                                  onClick={() => setConfirmingDelete(null)}
+                                  style={{ padding: '6px 10px', borderRadius: 6, border: `1px solid ${C.line}`, background: 'transparent', color: C.paperDim, fontSize: 12, cursor: 'pointer' }}
+                                >Cancel</button>
+                              )}
+                            </div>
                           </div>
+                          {confirmingDelete === b.id && (
+                            <div style={{ fontSize: 11, color: C.red, marginTop: -8, marginBottom: 14 }}>
+                              This permanently deletes {b.name} — every item, sale, and staff account with it. Cannot be undone.
+                            </div>
+                          )}
 
                           {detail.topItems.length > 0 && (
                             <>
