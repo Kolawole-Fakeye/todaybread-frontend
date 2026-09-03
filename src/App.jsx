@@ -3079,6 +3079,13 @@ function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onA
   const [committing, setCommitting] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState('');
+  // Diagnostic readout shown directly on the review screen — which model
+  // actually answered this request. Previously this only lived in Render
+  // logs (already returned by the backend as data.modelUsed, just never
+  // displayed), which meant every "why did it only find one line" question
+  // needed a log-diving round trip. Now it's visible immediately after
+  // every parse, no dashboard required.
+  const [modelUsed, setModelUsed] = useState('');
 
   const categoryNames = (categories || []).map(c => c.category).sort();
 
@@ -3160,6 +3167,7 @@ function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onA
       });
       setParsed(results);
       setDone(false);
+      setModelUsed(data.modelUsed || '');
     } catch (e) {
       // e.debug (present on OCR errors) is diagnostic detail for logs, not
       // for the screen — surfacing it here is what used to show the raw
@@ -3187,15 +3195,33 @@ function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onA
     ? !!(r.newDraft.name && r.newDraft.name.trim() && Number(r.newDraft.price) > 0)
     : !!(r.confirmed && r.match);
 
-  // Live running total across every row currently marked ready-to-save —
-  // recomputed on every render since it needs to track qty/price edits as
-  // the trader corrects them, not just the initial parse.
-  const rowLineTotal = (r) => {
-    if (r.creating) return (Number(r.newDraft.price) || 0) * (Number(r.overrideQty) || 0);
-    if (r.match) return Number(r.match.item.price) * (Number(r.overrideQty) || 0);
-    return 0;
+  // Best available per-unit price for a row, regardless of whether it's
+  // matched/confirmed yet: a confirmed match uses that item's real sale
+  // price; anything else falls back to newDraft.price, which is already
+  // pre-filled from the amount extracted off the page at parse time (see
+  // handleParse above) — this is what was missing before: an unmatched row
+  // showed NO price at all until the trader tapped "Create as new item",
+  // even though the backend had already extracted one straight off the
+  // receipt. isConfirmedPrice distinguishes "this is the real recorded
+  // price" (teal) from "this is a suggestion read off the photo, not yet
+  // saved anywhere" (amber) so the two don't look identically authoritative.
+  const rowUnitPrice = (r) => {
+    if (r.creating) return { amount: Number(r.newDraft.price) || 0, isConfirmedPrice: false };
+    if (r.match) return { amount: Number(r.match.item.price) || 0, isConfirmedPrice: true };
+    return { amount: Number(r.newDraft.price) || 0, isConfirmedPrice: false };
   };
-  const totalSales = (parsed || []).filter(isRowReady).reduce((sum, r) => sum + rowLineTotal(r), 0);
+  const rowLineTotal = (r) => rowUnitPrice(r).amount * (Number(r.overrideQty) || 0);
+
+  // Two different totals, shown in two different places on purpose:
+  // pageTotal is everything visible on the page right now (matched,
+  // unmatched-with-a-suggested-price, or mid-edit) — this is what lets the
+  // trader sanity-check against the total written at the bottom of their
+  // own receipt, even before confirming anything. readyTotal is only the
+  // rows that will actually be saved if they tap Confirm right now — shown
+  // on the button itself, so the two numbers can never be confused for
+  // each other.
+  const pageTotal = (parsed || []).reduce((sum, r) => sum + rowLineTotal(r), 0);
+  const readyTotal = (parsed || []).filter(isRowReady).reduce((sum, r) => sum + rowLineTotal(r), 0);
 
   const handleCommit = async () => {
     const toCommit = parsed.filter(isRowReady);
@@ -3375,13 +3401,21 @@ function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onA
             <div style={{ fontFamily: FONT_DISPLAY, fontSize: 15, textTransform: 'uppercase', letterSpacing: '0.03em', color: C.paper }}>Review before saving</div>
             <button onClick={() => setParsed(null)} style={{ fontSize: 11, color: C.paperDim, background: 'none', border: 'none', cursor: 'pointer' }}>← Start over</button>
           </div>
-          <div style={{ fontSize: 12, color: C.paperDim, marginBottom: 12 }}>
+          <div style={{ fontSize: 12, color: C.paperDim, marginBottom: 4 }}>
             {parsed.length} line{parsed.length !== 1 ? 's' : ''} extracted — nothing is saved to your ledger until you confirm below. Check names, quantities and prices carefully.
           </div>
+          {modelUsed && (
+            <div style={{ fontSize: 10, color: C.paperDim, fontFamily: FONT_MONO, marginBottom: 12 }}>
+              parsed via {modelUsed}
+            </div>
+          )}
 
-          {/* Total Sales — pinned near the top, bold, so the trader sees the
-              running total update live as they confirm/correct rows below,
-              rather than only finding out the sum after tapping save. */}
+          {/* Total Sales — pinned near the top, bold. Reflects EVERY line
+              currently visible with a price (matched or just suggested from
+              the photo), so it can be checked against the total written at
+              the bottom of the actual receipt even before anything is
+              confirmed. The Confirm button below shows the separate,
+              smaller "will actually be saved" total. */}
           <div style={{
             position: 'sticky', top: 0, zIndex: 5, background: C.ink, paddingBottom: 10, marginBottom: 12,
             borderBottom: `1px solid ${C.line}`,
@@ -3391,7 +3425,7 @@ function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onA
               background: `${C.teal}14`, border: `1px solid ${C.teal}55`, borderRadius: 10, padding: '12px 14px',
             }}>
               <span style={{ fontSize: 12, color: C.paperDim, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Total Sales</span>
-              <span style={{ fontFamily: FONT_MONO, fontSize: 22, fontWeight: 700, color: C.teal }}>{naira(totalSales)}</span>
+              <span style={{ fontFamily: FONT_MONO, fontSize: 22, fontWeight: 700, color: C.teal }}>{naira(pageTotal)}</span>
             </div>
           </div>
 
@@ -3399,7 +3433,7 @@ function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onA
             {parsed.map((row, idx) => {
               const borderColor = row.creating ? C.amber + '55' : (row.match && row.confirmed) ? C.teal + '55' : !row.match ? C.red + '55' : C.line;
               const lineTotal = rowLineTotal(row);
-              const unitPrice = row.creating ? Number(row.newDraft.price) || 0 : row.match ? Number(row.match.item.price) : 0;
+              const { amount: unitPrice, isConfirmedPrice } = rowUnitPrice(row);
               return (
                 <div key={idx} style={{ background: C.panel, border: `1px solid ${borderColor}`, borderRadius: 10, padding: '12px 14px' }}>
                   {/* Headline: item name big, raw OCR text demoted to a small caption underneath */}
@@ -3408,11 +3442,20 @@ function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onA
                   </div>
                   <div style={{ fontSize: 10, color: C.paperDim, fontFamily: FONT_MONO, marginBottom: 8 }}>from: "{row.rawLine}"</div>
 
-                  {/* Qty × price → line total, big and bold whenever a price is known */}
+                  {/* Qty × price → line total, shown for EVERY row with a
+                      known amount now, not just matched/creating ones — an
+                      unmatched row still has a price the backend read off
+                      the photo, and hiding it was the bug. Teal = a real,
+                      confirmed sale price (from an existing item's record);
+                      amber = a suggestion read straight off this photo,
+                      not saved or confirmed anywhere yet. */}
                   {!row.creating && unitPrice > 0 && (
                     <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 8, paddingBottom: 8, borderBottom: `1px solid ${C.line}` }}>
-                      <span style={{ fontSize: 12, color: C.paperDim }}>{row.overrideQty} × {naira(unitPrice)}</span>
-                      <span style={{ fontFamily: FONT_MONO, fontSize: 18, fontWeight: 700, color: C.teal }}>{naira(lineTotal)}</span>
+                      <span style={{ fontSize: 12, color: C.paperDim }}>
+                        {row.overrideQty} × {naira(unitPrice)}
+                        {!isConfirmedPrice && <span style={{ color: C.amber, fontStyle: 'italic' }}> (from photo, unconfirmed)</span>}
+                      </span>
+                      <span style={{ fontFamily: FONT_MONO, fontSize: 18, fontWeight: 700, color: isConfirmedPrice ? C.teal : C.amber }}>{naira(lineTotal)}</span>
                     </div>
                   )}
 
@@ -3556,7 +3599,7 @@ function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onA
           {error && <div style={{ color: C.red, fontSize: 12, marginBottom: 10 }}>{error}</div>}
 
           <button onClick={handleCommit} disabled={committing || readyCount === 0} style={{ width: '100%', padding: '13px 0', borderRadius: 8, border: 'none', background: readyCount > 0 ? C.amber : C.line, color: readyCount > 0 ? C.ink : C.paperDim, fontFamily: FONT_BODY, fontWeight: 700, fontSize: 14, cursor: readyCount > 0 ? 'pointer' : 'default' }}>
-            {committing ? 'Saving…' : `Confirm & Save to Ledger (${readyCount}) — ${naira(totalSales)}`}
+            {committing ? 'Saving…' : `Confirm & Save to Ledger (${readyCount}) — ${naira(readyTotal)}`}
           </button>
           </div>
         </div>
