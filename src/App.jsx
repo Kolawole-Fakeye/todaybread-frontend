@@ -968,10 +968,6 @@ function TickerBar({ fmtTime, rates, rateLoading, rateError, onRefresh }) {
       display: 'flex', alignItems: 'center', overflowX: 'auto',
       padding: '8px 12px', gap: 18,
     }}>
-      <Cell label="Lagos" value={fmtTime('Africa/Lagos')} />
-      <Cell label="New York" value={fmtTime('America/New_York')} />
-      <Cell label="Shanghai" value={fmtTime('Asia/Shanghai')} />
-      <div style={{ width: 1, height: 28, background: C.line, flexShrink: 0 }} />
       <Cell
         label="USD → NGN"
         value={rates ? `₦${rates.usdNgn.toFixed(0)}` : '—'}
@@ -982,6 +978,10 @@ function TickerBar({ fmtTime, rates, rateLoading, rateError, onRefresh }) {
         value={rates ? `₦${rates.cnyNgn.toFixed(1)}` : '—'}
         sub={cnyTrend === 'up' ? '▲' : cnyTrend === 'down' ? '▼' : rateError ? 'cached' : ' '}
       />
+      <div style={{ width: 1, height: 28, background: C.line, flexShrink: 0 }} />
+      <Cell label="Lagos" value={fmtTime('Africa/Lagos')} />
+      <Cell label="New York" value={fmtTime('America/New_York')} />
+      <Cell label="Shanghai" value={fmtTime('Asia/Shanghai')} />
       <button
         onClick={onRefresh}
         style={{ background: 'none', border: 'none', color: C.paperDim, cursor: 'pointer', flexShrink: 0, padding: 4 }}
@@ -3187,6 +3187,16 @@ function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onA
     ? !!(r.newDraft.name && r.newDraft.name.trim() && Number(r.newDraft.price) > 0)
     : !!(r.confirmed && r.match);
 
+  // Live running total across every row currently marked ready-to-save —
+  // recomputed on every render since it needs to track qty/price edits as
+  // the trader corrects them, not just the initial parse.
+  const rowLineTotal = (r) => {
+    if (r.creating) return (Number(r.newDraft.price) || 0) * (Number(r.overrideQty) || 0);
+    if (r.match) return Number(r.match.item.price) * (Number(r.overrideQty) || 0);
+    return 0;
+  };
+  const totalSales = (parsed || []).filter(isRowReady).reduce((sum, r) => sum + rowLineTotal(r), 0);
+
   const handleCommit = async () => {
     const toCommit = parsed.filter(isRowReady);
     if (toCommit.length === 0) return setError('Nothing ready to record yet');
@@ -3369,12 +3379,42 @@ function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onA
             {parsed.length} line{parsed.length !== 1 ? 's' : ''} extracted — nothing is saved to your ledger until you confirm below. Check names, quantities and prices carefully.
           </div>
 
+          {/* Total Sales — pinned near the top, bold, so the trader sees the
+              running total update live as they confirm/correct rows below,
+              rather than only finding out the sum after tapping save. */}
+          <div style={{
+            position: 'sticky', top: 0, zIndex: 5, background: C.ink, paddingBottom: 10, marginBottom: 12,
+            borderBottom: `1px solid ${C.line}`,
+          }}>
+            <div style={{
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              background: `${C.teal}14`, border: `1px solid ${C.teal}55`, borderRadius: 10, padding: '12px 14px',
+            }}>
+              <span style={{ fontSize: 12, color: C.paperDim, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Total Sales</span>
+              <span style={{ fontFamily: FONT_MONO, fontSize: 22, fontWeight: 700, color: C.teal }}>{naira(totalSales)}</span>
+            </div>
+          </div>
+
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
             {parsed.map((row, idx) => {
               const borderColor = row.creating ? C.amber + '55' : (row.match && row.confirmed) ? C.teal + '55' : !row.match ? C.red + '55' : C.line;
+              const lineTotal = rowLineTotal(row);
+              const unitPrice = row.creating ? Number(row.newDraft.price) || 0 : row.match ? Number(row.match.item.price) : 0;
               return (
                 <div key={idx} style={{ background: C.panel, border: `1px solid ${borderColor}`, borderRadius: 10, padding: '12px 14px' }}>
-                  <div style={{ fontSize: 10, color: C.paperDim, fontFamily: FONT_MONO, marginBottom: 6 }}>{row.rawLine}</div>
+                  {/* Headline: item name big, raw OCR text demoted to a small caption underneath */}
+                  <div style={{ fontSize: 14, fontWeight: 700, color: C.paper, marginBottom: 1 }}>
+                    {row.creating ? (row.newDraft.name || 'New item') : row.match ? row.match.item.name : row.rawLine}
+                  </div>
+                  <div style={{ fontSize: 10, color: C.paperDim, fontFamily: FONT_MONO, marginBottom: 8 }}>from: "{row.rawLine}"</div>
+
+                  {/* Qty × price → line total, big and bold whenever a price is known */}
+                  {!row.creating && unitPrice > 0 && (
+                    <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 8, paddingBottom: 8, borderBottom: `1px solid ${C.line}` }}>
+                      <span style={{ fontSize: 12, color: C.paperDim }}>{row.overrideQty} × {naira(unitPrice)}</span>
+                      <span style={{ fontFamily: FONT_MONO, fontSize: 18, fontWeight: 700, color: C.teal }}>{naira(lineTotal)}</span>
+                    </div>
+                  )}
 
                   {row.creating ? (
                     <div>
@@ -3406,6 +3446,12 @@ function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onA
                           placeholder="Batch/lot (optional)" style={{ padding: '7px 9px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_BODY, fontSize: 13 }}
                         />
                       </div>
+                      {Number(row.newDraft.price) > 0 && (
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, fontSize: 12 }}>
+                          <span style={{ color: C.paperDim }}>Line total</span>
+                          <span style={{ fontFamily: FONT_MONO, fontWeight: 700, color: C.teal }}>{naira(lineTotal)}</span>
+                        </div>
+                      )}
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <span style={{ fontSize: 11, color: C.paperDim }}>{mode === 'sales' ? 'Qty sold:' : 'Initial stock:'}</span>
                         <input type="number" value={row.overrideQty} min={1} onChange={e => updateQty(idx, e.target.value)} style={{ width: 52, textAlign: 'center', padding: '5px 6px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_MONO, fontSize: 14, fontWeight: 700 }} />
@@ -3417,8 +3463,7 @@ function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onA
                       {row.match ? (
                         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                           <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ fontSize: 13, fontWeight: 600 }}>{row.match.item.name}</div>
-                            <div style={{ fontSize: 11, color: C.paperDim, marginTop: 2 }}>{row.match.item.brand} · {Math.round(row.match.confidence * 100)}% match</div>
+                            <div style={{ fontSize: 11, color: C.paperDim }}>{row.match.item.brand} · {Math.round(row.match.confidence * 100)}% match</div>
                             {mode === 'stock' && row.suggestedExpiryDate && !row.match.item.expiryDate && (
                               <div style={{ fontSize: 10, color: C.teal, marginTop: 3 }}>Will set expiry: {row.suggestedExpiryDate} (this item has none yet)</div>
                             )}
@@ -3434,20 +3479,38 @@ function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onA
                       ) : (
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                           <AlertTriangle size={13} color={C.red} />
-                          <span style={{ fontSize: 12, color: C.red }}>No match found</span>
+                          <span style={{ fontSize: 12, color: C.red }}>Not in your inventory yet</span>
                         </div>
                       )}
 
-                      <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${C.line}`, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                        <span style={{ fontSize: 11, color: C.paperDim }}>{row.match ? 'Not this?' : 'Or:'}</span>
-                        <select onChange={e => updateMatch(idx, e.target.value)} value={row.match && !row.creating ? row.match.item.id : ''} style={{ flex: 1, minWidth: 140, padding: '5px 8px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontSize: 12 }}>
-                          <option value="">— pick an existing item —</option>
-                          {inventory.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
-                        </select>
-                        <button onClick={() => startCreating(idx)} style={{ padding: '5px 10px', borderRadius: 6, border: `1px dashed ${C.amber}66`, background: `${C.amber}14`, color: C.amber, fontWeight: 700, fontSize: 11, cursor: 'pointer', whiteSpace: 'nowrap' }}>+ Create as new item</button>
-                      </div>
-                      {mode === 'sales' && !row.match && (
-                        <div style={{ fontSize: 10, color: C.paperDim, fontStyle: 'italic', marginTop: 6 }}>Not in your inventory yet — sell it anyway, or create it from this line.</div>
+                      {/* Matching UI shrunk to a small text link instead of a
+                          full dropdown card on every row — and skipped
+                          entirely for a business with no inventory at all,
+                          since there's nothing to match against yet. */}
+                      {inventory.length > 0 && (
+                        <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${C.line}`, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                          {row.match ? (
+                            <select onChange={e => updateMatch(idx, e.target.value)} value={row.match.item.id} style={{ background: 'none', border: 'none', color: C.paperDim, textDecoration: 'underline', fontSize: 11, cursor: 'pointer', padding: 0 }}>
+                              <option value={row.match.item.id}>Not this? change match</option>
+                              {inventory.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
+                            </select>
+                          ) : (
+                            <select onChange={e => updateMatch(idx, e.target.value)} value="" style={{ flex: 1, minWidth: 140, padding: '5px 8px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontSize: 12 }}>
+                              <option value="">— pick an existing item —</option>
+                              {inventory.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
+                            </select>
+                          )}
+                          <button onClick={() => startCreating(idx)} style={{ padding: '5px 10px', borderRadius: 6, border: `1px dashed ${C.amber}66`, background: `${C.amber}14`, color: C.amber, fontWeight: 700, fontSize: 11, cursor: 'pointer', whiteSpace: 'nowrap' }}>+ Create as new item</button>
+                        </div>
+                      )}
+                      {!row.match && (
+                        <div style={{ marginTop: inventory.length > 0 ? 6 : 8 }}>
+                          {inventory.length === 0 ? (
+                            <button onClick={() => startCreating(idx)} style={{ padding: '6px 12px', borderRadius: 6, border: `1px dashed ${C.amber}66`, background: `${C.amber}14`, color: C.amber, fontWeight: 700, fontSize: 11, cursor: 'pointer' }}>+ Add price & save as new item</button>
+                          ) : mode === 'sales' && (
+                            <div style={{ fontSize: 10, color: C.paperDim, fontStyle: 'italic' }}>Sell it anyway, or create it from this line.</div>
+                          )}
+                        </div>
                       )}
                     </>
                   )}
@@ -3493,7 +3556,7 @@ function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onA
           {error && <div style={{ color: C.red, fontSize: 12, marginBottom: 10 }}>{error}</div>}
 
           <button onClick={handleCommit} disabled={committing || readyCount === 0} style={{ width: '100%', padding: '13px 0', borderRadius: 8, border: 'none', background: readyCount > 0 ? C.amber : C.line, color: readyCount > 0 ? C.ink : C.paperDim, fontFamily: FONT_BODY, fontWeight: 700, fontSize: 14, cursor: readyCount > 0 ? 'pointer' : 'default' }}>
-            {committing ? 'Saving…' : `Confirm & Save to Ledger (${readyCount})`}
+            {committing ? 'Saving…' : `Confirm & Save to Ledger (${readyCount}) — ${naira(totalSales)}`}
           </button>
           </div>
         </div>
