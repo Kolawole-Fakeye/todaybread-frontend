@@ -593,7 +593,7 @@ export default function TodayBread() {
           <InventoryView inventory={inventory} categories={categories} brands={brands} role={role} onSave={saveItem} onDelete={deleteItem} onClearAll={clearAllItems} onTogglePublic={togglePublic} onRestock={restockItem} onStartTracking={startTrackingStock} apiUrl={apiUrl} token={token} loadCategories={loadCategories} loadBrands={loadBrands} loadData={loadData} />
         )}
         {tab === 'sale' && (
-          <SaleView inventory={inventory} onSubmit={recordSale} sales={sales} role={role} onVoid={voidSale} />
+          <SaleView inventory={inventory} onSubmit={recordSale} onCreateItem={saveItem} sales={sales} role={role} onVoid={voidSale} />
         )}
         {tab === 'analytics' && (
           <AnalyticsView sales={sales} role={role} />
@@ -602,7 +602,7 @@ export default function TodayBread() {
           <InsightsView sales={sales} inventory={inventory} business={auth.business} apiUrl={apiUrl} token={token} onBusinessUpdated={(patch) => setAuth(a => ({ ...a, business: { ...a.business, ...patch } }))} />
         )}
         {tab === 'reports' && role === 'owner' && (
-          <ReportsView sales={sales} inventory={inventory} onVoid={voidSale} apiUrl={apiUrl} token={token} />
+          <ReportsView sales={sales} inventory={inventory} onVoid={voidSale} apiUrl={apiUrl} token={token} onGoToSale={() => setTab('sale')} />
         )}
         {tab === 'whatsapp' && role === 'owner' && (
           <WhatsAppView sales={sales} inventory={inventory} lowStockItems={lowStockItems} business={auth.business} apiUrl={apiUrl} token={token} onBusinessUpdated={(patch) => setAuth(a => ({ ...a, business: { ...a.business, ...patch } }))} />
@@ -1859,7 +1859,7 @@ function ItemForm({ item, existingCategories, existingBrands, onSave, onDelete, 
   );
 }
 
-function SaleView({ inventory, onSubmit, sales, role, onVoid }) {
+function SaleView({ inventory, onSubmit, onCreateItem, sales, role, onVoid }) {
   const [search, setSearch] = useState('');
   const [itemId, setItemId] = useState(null);
   const [qty, setQty] = useState(1);
@@ -1867,6 +1867,13 @@ function SaleView({ inventory, onSubmit, sales, role, onVoid }) {
   const [deductStock, setDeductStock] = useState(true);
   const [confirmed, setConfirmed] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
+  // Same "sell something that isn't in inventory yet" flow Snapshot already
+  // has — a shop selling something for the first time shouldn't have to
+  // stop, go to Inventory, add the item, then come back here to sell it.
+  const [creatingNew, setCreatingNew] = useState(false);
+  const [newItem, setNewItem] = useState({ name: '', price: '', cost: '' });
+  const [creatingBusy, setCreatingBusy] = useState(false);
+  const [createError, setCreateError] = useState('');
 
   // Ledger-first: every item is sellable regardless of stock count — the
   // count is advisory, not a gate on logging what actually happened.
@@ -1894,6 +1901,9 @@ function SaleView({ inventory, onSubmit, sales, role, onVoid }) {
     setSearch('');
     setShowDropdown(false);
     setQty(1);
+    setCreatingNew(false);
+    setNewItem({ name: '', price: '', cost: '' });
+    setCreateError('');
   };
 
   const submit = () => {
@@ -1904,6 +1914,30 @@ function SaleView({ inventory, onSubmit, sales, role, onVoid }) {
     setItemId(null);
     setSearch('');
     setTimeout(() => setConfirmed(false), 1800);
+  };
+
+  // Mirrors Snapshot's create-then-sell path: create the item with no
+  // starting stock count (stockTracked: false — same reasoning as a
+  // Snapshot-born item, there's no honest baseline to deduct from), then
+  // record the sale against it using the real frontend id the create call
+  // returns, not the backend id — recordSale looks items up by that id.
+  const submitNewItemSale = async () => {
+    if (!newItem.name.trim()) return setCreateError('Item name is required');
+    if (!newItem.price || Number(newItem.price) <= 0) return setCreateError('Sale price is required');
+    setCreatingBusy(true); setCreateError('');
+    try {
+      const created = await onCreateItem({
+        isNew: true, name: newItem.name.trim(), price: Number(newItem.price), cost: Number(newItem.cost) || 0,
+        stock: 0, warehouseStock: 0, reorder: 0, brand: '', size: '', category: '', origin: '', stockTracked: false,
+      });
+      if (!created) { setCreatingBusy(false); return; } // onCreateItem already alerts on failure
+      onSubmit(created.id, qty, payment, deductStock);
+      setConfirmed(true);
+      clearItem();
+      setTimeout(() => setConfirmed(false), 1800);
+    } finally {
+      setCreatingBusy(false);
+    }
   };
 
   return (
@@ -1951,7 +1985,15 @@ function SaleView({ inventory, onSubmit, sales, role, onVoid }) {
             boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
           }}>
             {filtered.length === 0 && (
-              <div style={{ padding: '12px 14px', color: C.paperDim, fontSize: 13 }}>No items match "{search}"</div>
+              <div style={{ padding: '12px 14px' }}>
+                <div style={{ color: C.paperDim, fontSize: 13, marginBottom: role === 'owner' ? 8 : 0 }}>No items match "{search}"</div>
+                {role === 'owner' && (
+                  <button
+                    onClick={() => { setCreatingNew(true); setNewItem(n => ({ ...n, name: search })); setShowDropdown(false); }}
+                    style={{ padding: '6px 12px', borderRadius: 6, border: `1px dashed ${C.amber}66`, background: `${C.amber}14`, color: C.amber, fontWeight: 700, fontSize: 12, cursor: 'pointer' }}
+                  >+ Create "{search}" as new item</button>
+                )}
+              </div>
             )}
             {filtered.map(i => (
               <button
@@ -1974,15 +2016,67 @@ function SaleView({ inventory, onSubmit, sales, role, onVoid }) {
         )}
       </div>
 
+      {/* New-item panel — same idea as Snapshot's "+ Create as new item":
+          no stock baseline set (stockTracked: false), sale price required,
+          cost optional. Owner-only, matching the backend's requireOwner on
+          item creation. */}
+      {creatingNew && (
+        <div style={{ background: `${C.amber}14`, border: `1px dashed ${C.amber}66`, borderRadius: 10, padding: 14, marginBottom: 14 }}>
+          <div style={{ fontSize: 12, color: C.amber, fontWeight: 700, marginBottom: 10 }}>+ New item</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 10 }}>
+            <input
+              value={newItem.name} onChange={e => setNewItem(n => ({ ...n, name: e.target.value }))}
+              placeholder="Item name" style={{ gridColumn: '1 / -1', padding: '9px 10px', borderRadius: 7, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_BODY, fontSize: 13 }}
+            />
+            <input
+              type="number" value={newItem.cost} onChange={e => setNewItem(n => ({ ...n, cost: e.target.value }))}
+              placeholder="Cost price (₦, optional)" style={{ padding: '9px 10px', borderRadius: 7, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_MONO, fontSize: 13 }}
+            />
+            <input
+              type="number" value={newItem.price} onChange={e => setNewItem(n => ({ ...n, price: e.target.value }))}
+              placeholder="Sale price (₦)" style={{ padding: '9px 10px', borderRadius: 7, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_MONO, fontSize: 13 }}
+            />
+          </div>
+          {createError && <div style={{ color: C.red, fontSize: 11, marginBottom: 8 }}>{createError}</div>}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+            <span style={{ fontSize: 12, color: C.paperDim, fontWeight: 600 }}>Quantity</span>
+            <button onClick={() => setQty(q => Math.max(1, q - 1))} style={qtyBtnStyle}><Minus size={14} /></button>
+            <input
+              type="number" value={qty} min={1} onChange={e => setQty(Math.max(1, Number(e.target.value) || 1))}
+              style={{ width: 60, textAlign: 'center', padding: '6px 8px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_MONO, fontSize: 18, fontWeight: 700 }}
+            />
+            <button onClick={() => setQty(q => q + 1)} style={qtyBtnStyle}><Plus size={14} /></button>
+          </div>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+            {['Cash', 'Transfer', 'POS'].map(p => (
+              <button key={p} onClick={() => setPayment(p)} style={{ flex: 1, padding: '8px 0', borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: 'pointer', border: `1px solid ${payment === p ? C.teal : C.line}`, background: payment === p ? `${C.teal}22` : 'transparent', color: payment === p ? C.teal : C.paperDim }}>{p}</button>
+            ))}
+          </div>
+          {Number(newItem.price) > 0 && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderTop: `1px solid ${C.line}`, marginBottom: 12 }}>
+              <span style={{ fontSize: 12, color: C.paperDim }}>Total</span>
+              <span style={{ fontFamily: FONT_MONO, fontSize: 18, fontWeight: 700, color: C.amber }}>{naira(Number(newItem.price) * qty)}</span>
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={clearItem} style={{ flex: 1, padding: '10px 0', borderRadius: 8, border: `1px solid ${C.line}`, background: 'transparent', color: C.paperDim, fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>Cancel</button>
+            <button
+              onClick={submitNewItemSale} disabled={creatingBusy}
+              style={{ flex: 1, padding: '10px 0', borderRadius: 8, border: 'none', background: C.amber, color: C.ink, fontWeight: 700, fontSize: 13, cursor: 'pointer' }}
+            >{creatingBusy ? 'Saving…' : 'Save & record sale'}</button>
+          </div>
+        </div>
+      )}
+
       {/* Selected item summary */}
-      {item && (
+      {item && !creatingNew && (
         <div style={{ background: `${C.amber}14`, border: `1px solid ${C.amber}44`, borderRadius: 8, padding: '10px 12px', marginBottom: 14 }}>
           <div style={{ fontSize: 13, fontWeight: 600 }}>{item.name}</div>
           <div style={{ fontSize: 11, color: C.paperDim, marginTop: 2 }}>{item.brand} · {item.size} · {item.stockTracked === false ? `${item.totalSold || 0} sold` : `${item.stock} in stock`}</div>
         </div>
       )}
 
-      {item && (
+      {item && !creatingNew && (
         <>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 14 }}>
             <span style={{ fontSize: 12, color: C.paperDim, fontWeight: 600 }}>Quantity</span>
@@ -2184,7 +2278,7 @@ function chipStyle(active, color = C.amber) {
   };
 }
 
-function ReportsView({ sales, inventory, onVoid, apiUrl, token }) {
+function ReportsView({ sales, inventory, onVoid, apiUrl, token, onGoToSale }) {
   const [range, setRange] = useState('today');
   const filteredAll = filterSalesByRange(sales, range); // includes voided — only the log display uses this
   const filtered = filteredAll.filter(s => !s.voided); // everything else (money math) uses this
@@ -2310,7 +2404,14 @@ function ReportsView({ sales, inventory, onVoid, apiUrl, token }) {
         <div style={{ textAlign: 'center', padding: '30px 16px', color: C.paperDim, background: C.panel, borderRadius: 10, border: `1px solid ${C.line}` }}>
           <ShoppingCart size={24} style={{ marginBottom: 10, opacity: 0.4 }} />
           <div style={{ fontSize: 13, fontWeight: 600, color: C.paper, marginBottom: 4 }}>No sales recorded yet</div>
-          <div style={{ fontSize: 12 }}>Head to <b style={{ color: C.amber }}>Record Sale</b> to log your first transaction — it'll show up here instantly.</div>
+          <div style={{ fontSize: 12 }}>
+            Head to{' '}
+            <button
+              onClick={onGoToSale}
+              style={{ background: 'none', border: 'none', padding: 0, color: C.amber, fontWeight: 700, textDecoration: 'underline', cursor: 'pointer', fontSize: 12, fontFamily: FONT_BODY }}
+            >Record Sale</button>
+            {' '}to log your first transaction — it'll show up here instantly.
+          </div>
         </div>
       )}
 
@@ -3238,7 +3339,7 @@ function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onA
           const dupe = createdThisBatch.find(c => c.name.trim().toLowerCase() === normName);
           if (dupe) {
             if (mode === 'sales') {
-              await onRecordSales(dupe.dbId, row.overrideQty, payment, deductStock);
+              await onRecordSales(dupe.id, row.overrideQty, payment, deductStock);
             } else {
               const updated = await onAddStock({ ...dupe, stock: dupe.stock + row.overrideQty });
               if (updated) createdThisBatch[createdThisBatch.indexOf(dupe)] = updated;
@@ -3260,7 +3361,7 @@ function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onA
             });
             if (created) {
               createdThisBatch.push(created);
-              await onRecordSales(created.dbId, row.overrideQty, payment, deductStock);
+              await onRecordSales(created.id, row.overrideQty, payment, deductStock);
             }
           } else {
             // Stock Arrival — the parsed quantity IS what physically arrived,
