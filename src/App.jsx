@@ -3123,12 +3123,61 @@ function readFileAsBase64(file) {
 // tens-to-low-hundreds of KB rather than several MB, before it ever goes to
 // Gemini. Runs entirely client-side — nothing about the image touches the
 // network until this has already shrunk it.
+// Lightweight, dependency-free blur estimate — no OpenCV-for-mobile or
+// native MLKit needed (those are for native iOS/Android apps; this is a
+// browser-based web app, so neither applies here, and pulling in a heavy
+// CV library for one heuristic check would be its own cost). Downscales to
+// a small fixed width, converts to grayscale, and measures a simple
+// Laplacian-style edge variance: a sharp, in-focus photo has strong
+// high-frequency edges (high variance); a blurry one smears those edges
+// out (low variance). This is a heuristic, not a calibrated model — the
+// threshold used below is a starting point. Runs on the same already-
+// loaded <img> element compressImageForUpload uses, so it costs nothing
+// extra in terms of loading the file twice.
+function estimateBlurScore(img) {
+  const sampleWidth = 300;
+  const scale = sampleWidth / img.width;
+  const sampleHeight = Math.max(1, Math.round(img.height * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = sampleWidth;
+  canvas.height = sampleHeight;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(img, 0, 0, sampleWidth, sampleHeight);
+  const { data } = ctx.getImageData(0, 0, sampleWidth, sampleHeight);
+
+  const gray = new Float32Array(sampleWidth * sampleHeight);
+  for (let i = 0; i < sampleWidth * sampleHeight; i++) {
+    gray[i] = 0.299 * data[i * 4] + 0.587 * data[i * 4 + 1] + 0.114 * data[i * 4 + 2];
+  }
+
+  // 4-neighbor Laplacian convolution, then variance of the result.
+  let sum = 0, sumSq = 0, count = 0;
+  for (let y = 1; y < sampleHeight - 1; y++) {
+    for (let x = 1; x < sampleWidth - 1; x++) {
+      const idx = y * sampleWidth + x;
+      const lap = 4 * gray[idx] - gray[idx - 1] - gray[idx + 1] - gray[idx - sampleWidth] - gray[idx + sampleWidth];
+      sum += lap;
+      sumSq += lap * lap;
+      count++;
+    }
+  }
+  const mean = sum / count;
+  return sumSq / count - mean * mean; // variance — higher means sharper
+}
+
+// Below this, a photo is treated as too blurry to bother uploading. This
+// is a heuristic starting point, not a calibrated cutoff — tune it up or
+// down once real user photos show what your actual blurry/sharp boundary
+// looks like (log real scores for a while before tightening it further).
+const BLUR_SCORE_MINIMUM = 150;
+
 function compressImageForUpload(file, { maxDimension = 2200, quality = 0.85 } = {}) {
   return new Promise((resolve, reject) => {
     const img = new Image();
     const objectUrl = URL.createObjectURL(file);
     img.onload = () => {
       URL.revokeObjectURL(objectUrl);
+      const blurScore = estimateBlurScore(img);
       let { width, height } = img;
       if (width > maxDimension || height > maxDimension) {
         const scale = maxDimension / Math.max(width, height);
@@ -3151,6 +3200,7 @@ function compressImageForUpload(file, { maxDimension = 2200, quality = 0.85 } = 
               base64: commaIdx >= 0 ? result.slice(commaIdx + 1) : result,
               mediaType: 'image/jpeg',
               sizeKb: Math.round(blob.size / 1024),
+              blurScore,
             });
           };
           reader.onerror = () => reject(new Error('Could not read the compressed photo'));
@@ -3200,6 +3250,18 @@ function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onA
     setCompressing(true);
     try {
       const info = await compressImageForUpload(file);
+      // Caught here, before the photo ever leaves the phone — a blurry
+      // photo previously had to fail an entire backend AI round trip
+      // (burning a real API call, sometimes several with the two-pass
+      // escalation chain) before the trader found out it couldn't be
+      // read. This stops that here instead, instantly, on-device.
+      if (info.blurScore < BLUR_SCORE_MINIMUM) {
+        setError('Image too blurry. Please hold steady and snap the photo again.');
+        setPhotoFile(null);
+        if (photoPreview) URL.revokeObjectURL(photoPreview);
+        setPhotoPreview(null);
+        return;
+      }
       setCompressedInfo(info);
     } catch (err) {
       setError(err.message || 'Could not process that photo — try another one');
