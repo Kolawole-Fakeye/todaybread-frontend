@@ -611,7 +611,7 @@ export default function TodayBread() {
           <StaffView apiUrl={apiUrl} token={token} />
         )}
         {tab === 'notebook' && role === 'owner' && (
-          <NotebookView inventory={inventory} categories={categories} apiUrl={apiUrl} token={token} onRecordSales={recordSale} onAddStock={saveItem} onReceiveStock={receiveStock} />
+          <NotebookView inventory={inventory} categories={categories} sales={sales} apiUrl={apiUrl} token={token} onRecordSales={recordSale} onAddStock={saveItem} onReceiveStock={receiveStock} />
         )}
         <LegalFooterLinks />
       </div>
@@ -2512,6 +2512,36 @@ function InsightsView({ sales, inventory, business, apiUrl, token, onBusinessUpd
   const [reportSaving, setReportSaving] = useState(false);
   const [reportError, setReportError] = useState('');
   const quarterlyEnabled = business?.quarterly_reports_enabled === true;
+  // "Email report" replaces Print as the practical way to get this out of
+  // the app — printers are rarely actually connected day-to-day for a
+  // small trader, while email always works. Reuses whatever email is on
+  // file from quarterly-report opt-in; only prompts for one inline if the
+  // backend comes back saying it has none on file yet.
+  const [emailSending, setEmailSending] = useState(false);
+  const [emailSent, setEmailSent] = useState(false);
+  const [emailError, setEmailError] = useState('');
+  const [needsEmailInput, setNeedsEmailInput] = useState(false);
+
+  const handleEmailReport = async () => {
+    setEmailSending(true); setEmailError(''); setEmailSent(false);
+    try {
+      const body = reportEmail.trim() ? { email: reportEmail.trim() } : {};
+      await apiRequest(apiUrl, '/reports/email-now', { method: 'POST', token, body });
+      setEmailSent(true);
+      setNeedsEmailInput(false);
+      setTimeout(() => setEmailSent(false), 3000);
+    } catch (e) {
+      // Backend returns this specific message when there's no email on
+      // file at all yet — that's the one case worth prompting inline for,
+      // rather than just showing a dead-end error.
+      if ((e.message || '').includes('No email on file')) {
+        setNeedsEmailInput(true);
+      }
+      setEmailError(e.message || 'Could not send the report email');
+    } finally {
+      setEmailSending(false);
+    }
+  };
 
   const handleToggleQuarterly = async (nextEnabled) => {
     setReportError('');
@@ -2610,12 +2640,35 @@ function InsightsView({ sales, inventory, business, apiUrl, token, onBusinessUpd
             What your notebook never told you
           </span>
         </div>
-        <button
-          id="insights-print-hide"
-          onClick={() => window.print()}
-          style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 10px', borderRadius: 7, border: `1px solid ${C.line}`, background: 'transparent', color: C.paperDim, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}
-        ><Printer size={13} /> Print</button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            id="insights-print-hide"
+            onClick={handleEmailReport} disabled={emailSending}
+            style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 10px', borderRadius: 7, border: `1px solid ${emailSent ? C.teal : C.line}`, background: emailSent ? `${C.teal}18` : 'transparent', color: emailSent ? C.teal : C.paperDim, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}
+          ><MessageCircle size={13} /> {emailSending ? 'Sending…' : emailSent ? 'Sent ✓' : 'Email report'}</button>
+          <button
+            id="insights-print-hide"
+            onClick={() => window.print()}
+            style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 10px', borderRadius: 7, border: `1px solid ${C.line}`, background: 'transparent', color: C.paperDim, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}
+          ><Printer size={13} /> Print</button>
+        </div>
       </div>
+
+      {needsEmailInput && (
+        <div id="insights-print-hide" style={{ background: C.panel, border: `1px solid ${C.amber}55`, borderRadius: 8, padding: 12, marginBottom: 16 }}>
+          <div style={{ fontSize: 12, color: C.paperDim, marginBottom: 8 }}>No email on file yet — enter one to send this report to (it'll be saved for next time too).</div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input
+              value={reportEmail} onChange={e => setReportEmail(e.target.value)} placeholder="Your email address"
+              style={{ flex: 1, padding: '8px 10px', borderRadius: 7, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontSize: 13 }}
+            />
+            <button onClick={handleEmailReport} disabled={emailSending} style={{ padding: '8px 14px', borderRadius: 7, border: 'none', background: C.amber, color: C.ink, fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>{emailSending ? '…' : 'Send'}</button>
+          </div>
+        </div>
+      )}
+      {emailError && !needsEmailInput && (
+        <div id="insights-print-hide" style={{ color: C.red, fontSize: 11, marginBottom: 12 }}>{emailError}</div>
+      )}
 
       {/* Quarterly report opt-in */}
       <div id="insights-print-hide" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 10, padding: 14, marginBottom: 16 }}>
@@ -3215,7 +3268,7 @@ function compressImageForUpload(file, { maxDimension = 2200, quality = 0.85 } = 
   });
 }
 
-function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onAddStock, onReceiveStock }) {
+function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSales, onAddStock, onReceiveStock }) {
   const [mode, setMode] = useState('sales'); // sales | stock
   const [inputMode, setInputMode] = useState('text'); // text | photo
   const [raw, setRaw] = useState('');
@@ -3237,6 +3290,29 @@ function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onA
   // needed a log-diving round trip. Now it's visible immediately after
   // every parse, no dashboard required.
   const [modelUsed, setModelUsed] = useState('');
+  // The date the PAGE itself is dated (from a printed receipt header or a
+  // handwritten date at the top), when the backend can find one — distinct
+  // from any per-item expiry date. Used both to show prominently on the
+  // review screen and to flag a likely re-scan of an already-recorded day.
+  const [ledgerDate, setLedgerDate] = useState(null);
+  // Friendly, rotating copy shown while parsing runs — this can genuinely
+  // take a few extra seconds when the fast single-pass attempt comes back
+  // thin and the slower escalation chain kicks in, so a static "Reading
+  // entries…" starts to feel stuck. Cycling reassuring messages instead.
+  const PARSING_MESSAGES = [
+    'Reading your ledger…',
+    'Working through the handwriting…',
+    'Double-checking a tricky line…',
+    'Matching items to your inventory…',
+    'Almost there…',
+  ];
+  const [parsingMessageIdx, setParsingMessageIdx] = useState(0);
+
+  useEffect(() => {
+    if (!parsing) { setParsingMessageIdx(0); return; }
+    const interval = setInterval(() => setParsingMessageIdx(i => (i + 1) % PARSING_MESSAGES.length), 1800);
+    return () => clearInterval(interval);
+  }, [parsing]);
 
   const categoryNames = (categories || []).map(c => c.category).sort();
 
@@ -3320,6 +3396,13 @@ function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onA
           match,
           confirmed: !!match && !row.needsReview,
           creating: false,
+          // Present only when the receipt's own implied price for a
+          // MATCHED item differs meaningfully from what's on file.
+          // priceResolution starts null (unresolved, purely informational
+          // — never blocks confirming the sale); 'keep' or 'update' once
+          // the trader has actually looked at it and picked one.
+          priceMismatch: row.priceMismatch || null,
+          priceResolution: null,
           newDraft: {
             name: row.rawDescription, category: row.suggestedCategory || '',
             price: mode === 'sales' ? estUnitAmount : '',
@@ -3331,6 +3414,7 @@ function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onA
       setParsed(results);
       setDone(false);
       setModelUsed(data.modelUsed || '');
+      setLedgerDate(data.ledgerDate || null);
     } catch (e) {
       // e.debug (present on OCR errors) is diagnostic detail for logs, not
       // for the screen — surfacing it here is what used to show the raw
@@ -3385,6 +3469,44 @@ function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onA
   // each other.
   const pageTotal = (parsed || []).reduce((sum, r) => sum + rowLineTotal(r), 0);
   const readyTotal = (parsed || []).filter(isRowReady).reduce((sum, r) => sum + rowLineTotal(r), 0);
+
+  // 'keep' just acknowledges the flag (no data changes — the recorded
+  // price keeps being used, same as if nothing were flagged at all).
+  // 'update' persists the receipt's price onto the actual inventory item
+  // via the same saveItem path Inventory's own edit form uses, then
+  // reflects it immediately in this row so the line re-totals right away.
+  const resolvePriceMismatch = async (idx, action) => {
+    const row = parsed[idx];
+    if (!row || !row.priceMismatch) return;
+    if (action === 'keep') {
+      setParsed(p => p.map((r, i) => i === idx ? { ...r, priceResolution: 'keep' } : r));
+      return;
+    }
+    const newPrice = row.priceMismatch.extractedUnitPrice;
+    const updated = await onAddStock({ ...row.match.item, price: newPrice, isNew: false });
+    setParsed(p => p.map((r, i) => i === idx
+      ? { ...r, priceResolution: 'update', match: { ...r.match, item: updated || { ...r.match.item, price: newPrice } } }
+      : r
+    ));
+  };
+
+  // Soft, non-blocking nudge only — if this page's own dated total roughly
+  // matches revenue already recorded for that same calendar day, it's
+  // probably the same page being scanned twice rather than a coincidence.
+  // Never blocks Confirm — ledger-first means the trader's own judgment
+  // always wins; this is a heads-up, not a gate.
+  const duplicateDayWarning = useMemo(() => {
+    if (!ledgerDate || !parsed || mode !== 'sales') return null;
+    const existingTotal = (sales || [])
+      .filter(s => !s.voided && new Date(s.timestamp).toISOString().slice(0, 10) === ledgerDate)
+      .reduce((sum, s) => sum + s.qty * s.unitPrice, 0);
+    if (existingTotal <= 0) return null;
+    const diffRatio = Math.abs(existingTotal - pageTotal) / Math.max(existingTotal, pageTotal, 1);
+    if (diffRatio < 0.15) {
+      return `This looks like it might already be recorded — ${naira(existingTotal)} was already logged on ${ledgerDate}.`;
+    }
+    return null;
+  }, [ledgerDate, parsed, sales, pageTotal, mode]);
 
   const handleCommit = async () => {
     const toCommit = parsed.filter(isRowReady);
@@ -3543,7 +3665,7 @@ function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onA
               cursor: (inputMode === 'text' ? raw.trim() : compressedInfo) ? 'pointer' : 'default',
             }}
           >
-            {parsing ? 'Reading entries…' : compressing ? 'Preparing photo…' : 'Parse entries'}
+            {parsing ? PARSING_MESSAGES[parsingMessageIdx] : compressing ? 'Preparing photo…' : 'Parse entries'}
           </button>
         </>
       )}
@@ -3570,6 +3692,25 @@ function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onA
           {modelUsed && (
             <div style={{ fontSize: 10, color: C.paperDim, fontFamily: FONT_MONO, marginBottom: 12 }}>
               parsed via {modelUsed}
+            </div>
+          )}
+
+          {/* Ledger date — prominent, right next to Total Sales, so the
+              trader can see at a glance which day this page is dated, not
+              just how much it adds up to. */}
+          {ledgerDate && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+              <Clock size={13} color={C.amber} />
+              <span style={{ fontSize: 13, fontWeight: 700, color: C.amber }}>Dated {ledgerDate}</span>
+            </div>
+          )}
+
+          {/* Soft, non-blocking nudge that this page's total looks close to
+              a day's revenue already on record — never blocks Confirm. */}
+          {duplicateDayWarning && (
+            <div style={{ background: `${C.red}14`, border: `1px solid ${C.red}55`, borderRadius: 8, padding: '10px 12px', marginBottom: 10, display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+              <AlertTriangle size={14} color={C.red} style={{ flexShrink: 0, marginTop: 1 }} />
+              <span style={{ fontSize: 12, color: C.paper }}>{duplicateDayWarning}</span>
             </div>
           )}
 
@@ -3620,6 +3761,26 @@ function NotebookView({ inventory, categories, apiUrl, token, onRecordSales, onA
                       </span>
                       <span style={{ fontFamily: FONT_MONO, fontSize: 18, fontWeight: 700, color: isConfirmedPrice ? C.teal : C.amber }}>{naira(lineTotal)}</span>
                     </div>
+                  )}
+
+                  {/* Price-mismatch flag — only for a MATCHED item whose
+                      receipt-implied price differs meaningfully from what's
+                      on file. Purely informational until the trader picks
+                      one; the sale still uses the recorded price either way
+                      unless "Update" is tapped. */}
+                  {row.priceMismatch && !row.priceResolution && (
+                    <div style={{ background: `${C.amber}14`, border: `1px solid ${C.amber}55`, borderRadius: 8, padding: '10px 12px', marginBottom: 8 }}>
+                      <div style={{ fontSize: 12, color: C.paper, marginBottom: 8 }}>
+                        This line reads <b style={{ color: C.amber }}>{naira(row.priceMismatch.extractedUnitPrice)}</b>, but your records show <b>{naira(row.priceMismatch.recordedPrice)}</b>.
+                      </div>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <button onClick={() => resolvePriceMismatch(idx, 'keep')} style={{ flex: 1, padding: '7px 0', borderRadius: 6, border: `1px solid ${C.line}`, background: 'transparent', color: C.paperDim, fontWeight: 700, fontSize: 11, cursor: 'pointer' }}>Keep recorded price</button>
+                        <button onClick={() => resolvePriceMismatch(idx, 'update')} style={{ flex: 1, padding: '7px 0', borderRadius: 6, border: 'none', background: C.amber, color: C.ink, fontWeight: 700, fontSize: 11, cursor: 'pointer' }}>Update to {naira(row.priceMismatch.extractedUnitPrice)}</button>
+                      </div>
+                    </div>
+                  )}
+                  {row.priceMismatch && row.priceResolution === 'update' && (
+                    <div style={{ fontSize: 10, color: C.teal, marginBottom: 8 }}>✓ Price updated to {naira(row.priceMismatch.extractedUnitPrice)}</div>
                   )}
 
                   {row.creating ? (
