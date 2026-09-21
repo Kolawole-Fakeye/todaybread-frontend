@@ -2900,6 +2900,46 @@ function WhatsAppView({ sales, inventory, lowStockItems, business, apiUrl, token
     }
   };
 
+  // "Share a product photo" — deliberately the simplest version of this:
+  // no product-photo storage in inventory, no backend involved at all.
+  // Owner picks a photo already on their phone (gallery or camera, same
+  // native picker as everywhere else in the app), then the OS's own native
+  // share sheet opens with that image attached — WhatsApp, Instagram,
+  // Status, SMS, whatever the phone offers shows up there automatically,
+  // since that list is the OS's doing, not something built here.
+  const [shareError, setShareError] = useState('');
+  const [sharing, setSharing] = useState(false);
+  const shareFileInputRef = React.useRef(null);
+
+  const handleShareFileSelected = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // allow re-selecting the same file next time
+    if (!file) return;
+    setShareError('');
+    // canShare({ files }) is the real feature check — navigator.share
+    // existing alone only guarantees text/link sharing (Web Share API
+    // Level 1); actually attaching a file needs Level 2 support, which
+    // isn't universal (notably spotty on older iOS Safari versions).
+    if (!navigator.share || !navigator.canShare || !navigator.canShare({ files: [file] })) {
+      setShareError("Your browser can't share photos directly this way — try saving the photo and sharing it from your gallery app instead.");
+      return;
+    }
+    setSharing(true);
+    try {
+      await navigator.share({
+        files: [file],
+        title: business?.name || 'My shop',
+        text: `${business?.name || 'Check out our products'}${catalogueUrl ? ` — ${catalogueUrl}` : ''}`,
+      });
+    } catch (err) {
+      // AbortError just means the person closed the share sheet without
+      // picking anything — not a real error, nothing to show for that.
+      if (err.name !== 'AbortError') setShareError('Could not open the share menu — try again.');
+    } finally {
+      setSharing(false);
+    }
+  };
+
   return (
     <div>
 
@@ -2973,6 +3013,18 @@ function WhatsAppView({ sales, inventory, lowStockItems, business, apiUrl, token
             ><MessageCircle size={13} /> Share on WhatsApp</a>
           </>
         )}
+
+        {/* Share a product photo — straight from gallery/camera to the
+            phone's native share sheet (WhatsApp, Instagram, Status, SMS,
+            whatever's installed). No photo storage, no backend involved. */}
+        <div style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${C.line}` }}>
+          <input ref={shareFileInputRef} type="file" accept="image/*" onChange={handleShareFileSelected} style={{ display: 'none' }} />
+          <button
+            onClick={() => shareFileInputRef.current?.click()} disabled={sharing}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 12px', borderRadius: 7, border: `1px solid ${C.amber}66`, background: `${C.amber}14`, color: C.amber, fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
+          ><ImageIcon size={13} /> {sharing ? 'Opening…' : 'Share a product photo'}</button>
+          {shareError && <div style={{ color: C.red, fontSize: 11, marginTop: 6 }}>{shareError}</div>}
+        </div>
       </div>
 
       {/* Today's summary — real, sendable now via click-to-chat */}
