@@ -611,7 +611,7 @@ export default function TodayBread() {
           <StaffView apiUrl={apiUrl} token={token} />
         )}
         {tab === 'notebook' && role === 'owner' && (
-          <NotebookView inventory={inventory} categories={categories} sales={sales} apiUrl={apiUrl} token={token} onRecordSales={recordSale} onAddStock={saveItem} onReceiveStock={receiveStock} />
+          <NotebookView inventory={inventory} categories={categories} sales={sales} apiUrl={apiUrl} token={token} onRecordSales={recordSale} onAddStock={saveItem} onReceiveStock={receiveStock} onRefresh={loadData} />
         )}
         <LegalFooterLinks />
       </div>
@@ -3320,53 +3320,86 @@ function compressImageForUpload(file, { maxDimension = 2200, quality = 0.85 } = 
   });
 }
 
-function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSales, onAddStock, onReceiveStock }) {
+function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSales, onAddStock, onReceiveStock, onRefresh }) {
   const [mode, setMode] = useState('sales'); // sales | stock
   const [inputMode, setInputMode] = useState('text'); // text | photo
   const [raw, setRaw] = useState('');
   const [photoFile, setPhotoFile] = useState(null);
   const [photoPreview, setPhotoPreview] = useState(null);
   const [compressedInfo, setCompressedInfo] = useState(null); // { base64, mediaType, sizeKb }
+  // Soft warning, not a block — the blur threshold is a heuristic guess,
+  // untested across different phone cameras. A hard reject here previously
+  // meant a perfectly good photo from an unfamiliar phone's camera could
+  // get silently refused before ever reaching the AI at all — exactly the
+  // kind of "only worked on my phone" inconsistency worth never risking
+  // again. Now it just flags, and the trader decides.
+  const [blurWarning, setBlurWarning] = useState(false);
   const [compressing, setCompressing] = useState(false);
+
+  // STAGE 1 — the flat, ruled-notebook-style editable page. Populated by
+  // /ocr/transcribe (fast, vision-only, no matching) the moment a photo is
+  // taken or pasted text is submitted. Every field here is editable before
+  // anything touches inventory matching — qty, name, amount, cost/sale
+  // price, and the ledger date itself (so a page from weeks ago can be
+  // backdated correctly). null means stage 1 hasn't run yet; [] is a valid
+  // state (extraction came back empty — the trader types the page by hand).
+  const [flatRows, setFlatRows] = useState(null);
+  const [transcribing, setTranscribing] = useState(false);
+  // Generated once when stage 1 opens and reused for every retry of the
+  // SAME scan (parse-page and, especially, commit) — this is what makes a
+  // retried commit after a lost response on bad market network idempotent
+  // instead of double-recording everything. A fresh id is only minted when
+  // a genuinely new photo/page is started.
+  const [clientScanId, setClientScanId] = useState(null);
+
+  // STAGE 2 — unchanged from before: matching, category/expiry inference,
+  // price-mismatch checks, already-existing review UI.
   const [parsed, setParsed] = useState(null);
   const [payment, setPayment] = useState('Cash');
   const [deductStock, setDeductStock] = useState(true);
-  const [parsing, setParsing] = useState(false);
+  const [parsing, setParsing] = useState(false); // stage 2 (parse-page) in flight
   const [committing, setCommitting] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState('');
-  // Diagnostic readout shown directly on the review screen — which model
-  // actually answered this request. Previously this only lived in Render
-  // logs (already returned by the backend as data.modelUsed, just never
-  // displayed), which meant every "why did it only find one line" question
-  // needed a log-diving round trip. Now it's visible immediately after
-  // every parse, no dashboard required.
   const [modelUsed, setModelUsed] = useState('');
-  // The date the PAGE itself is dated (from a printed receipt header or a
-  // handwritten date at the top), when the backend can find one — distinct
-  // from any per-item expiry date. Used both to show prominently on the
-  // review screen and to flag a likely re-scan of an already-recorded day.
+  // The date the PAGE itself is dated — editable throughout stage 1, and
+  // shown again (also still editable via stage 1's back button) in stage 2.
   const [ledgerDate, setLedgerDate] = useState(null);
-  // Friendly, rotating copy shown while parsing runs — this can genuinely
-  // take a few extra seconds when the fast single-pass attempt comes back
-  // thin and the slower escalation chain kicks in, so a static "Reading
-  // entries…" starts to feel stuck. Cycling reassuring messages instead.
-  const PARSING_MESSAGES = [
+
+  const TRANSCRIBING_MESSAGES = [
     'Reading your ledger…',
     'Working through the handwriting…',
-    'Double-checking a tricky line…',
-    'Matching items to your inventory…',
     'Almost there…',
   ];
-  const [parsingMessageIdx, setParsingMessageIdx] = useState(0);
-
+  const [transcribingMsgIdx, setTranscribingMsgIdx] = useState(0);
   useEffect(() => {
-    if (!parsing) { setParsingMessageIdx(0); return; }
-    const interval = setInterval(() => setParsingMessageIdx(i => (i + 1) % PARSING_MESSAGES.length), 1800);
+    if (!transcribing) { setTranscribingMsgIdx(0); return; }
+    const interval = setInterval(() => setTranscribingMsgIdx(i => (i + 1) % TRANSCRIBING_MESSAGES.length), 1600);
     return () => clearInterval(interval);
-  }, [parsing]);
+  }, [transcribing]);
 
   const categoryNames = (categories || []).map(c => c.category).sort();
+
+  // Client-side, non-authoritative preview match — mirrors the backend's
+  // normalize()+word-overlap scoring (not the alias check, which needs the
+  // DB) so stage 1 can decide, instantly and with no network call, whether
+  // a row already has a confident inventory match. This is ONLY used to
+  // decide whether to show a cost/sale price field on the flat page — the
+  // real, authoritative match (aliases included) happens server-side when
+  // "Continue" hits /ocr/parse-page.
+  const normalizeLocal = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').trim();
+  const quickMatch = (description) => {
+    const target = normalizeLocal(description).split(' ').filter(Boolean);
+    if (target.length === 0 || !inventory || inventory.length === 0) return null;
+    let best = null, bestScore = 0;
+    for (const item of inventory) {
+      const words = normalizeLocal(item.name).split(' ').filter(Boolean);
+      const overlap = target.filter(w => words.includes(w)).length;
+      const score = overlap / Math.max(target.length, words.length);
+      if (score > bestScore) { bestScore = score; best = item; }
+    }
+    return bestScore >= 0.12 ? { item: best, confidence: bestScore } : null;
+  };
 
   const handlePhotoSelect = async (e) => {
     const file = e.target.files?.[0];
@@ -3375,21 +3408,15 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
     setPhotoPreview(URL.createObjectURL(file));
     setError('');
     setCompressedInfo(null);
+    setBlurWarning(false);
     setCompressing(true);
     try {
       const info = await compressImageForUpload(file);
-      // Caught here, before the photo ever leaves the phone — a blurry
-      // photo previously had to fail an entire backend AI round trip
-      // (burning a real API call, sometimes several with the two-pass
-      // escalation chain) before the trader found out it couldn't be
-      // read. This stops that here instead, instantly, on-device.
-      if (info.blurScore < BLUR_SCORE_MINIMUM) {
-        setError('Image too blurry. Please hold steady and snap the photo again.');
-        setPhotoFile(null);
-        if (photoPreview) URL.revokeObjectURL(photoPreview);
-        setPhotoPreview(null);
-        return;
-      }
+      // Flagged, not blocked — see the note on blurWarning above. The
+      // photo is still fully usable; this just surfaces a heads-up so the
+      // trader can retake it if they want to, without risking a real,
+      // readable photo getting refused outright.
+      setBlurWarning(info.blurScore < BLUR_SCORE_MINIMUM);
       setCompressedInfo(info);
     } catch (err) {
       setError(err.message || 'Could not process that photo — try another one');
@@ -3404,77 +3431,120 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
     if (photoPreview) URL.revokeObjectURL(photoPreview);
     setPhotoPreview(null);
     setCompressedInfo(null);
+    setBlurWarning(false);
   };
 
-  const handleParse = async () => {
+  const startOverCompletely = () => {
+    setFlatRows(null); setParsed(null); setRaw(''); clearPhoto();
+    setLedgerDate(null); setModelUsed(''); setError(''); setClientScanId(null);
+  };
+
+  // STAGE 1 kickoff — fast, vision-only extraction. Never surfaces a hard
+  // error to the trader: even if every vendor fails, the flat page still
+  // opens (empty), so a bad-network moment means typing the page instead
+  // of being blocked, not losing the scan entirely.
+  const handleTranscribe = async () => {
     setError('');
     if (inputMode === 'text' && !raw.trim()) return setError('Paste some ledger text first');
     if (inputMode === 'photo' && !compressedInfo) return setError('Choose a photo first');
 
+    setTranscribing(true);
+    try {
+      const body = inputMode === 'photo'
+        ? { imageBase64: compressedInfo.base64, mediaType: compressedInfo.mediaType, mode }
+        : { text: raw, mode };
+      const data = await apiRequest(apiUrl, '/ocr/transcribe', { method: 'POST', token, body });
+
+      const rows = (data.rows && data.rows.length > 0) ? data.rows : [{ description: '', quantity: 1, amount: null }];
+      setFlatRows(rows.map(r => ({
+        description: r.description || '',
+        quantity: r.quantity || 1,
+        amount: r.amount != null ? r.amount : '',
+      })));
+      setLedgerDate(data.ledgerDate || new Date().toISOString().slice(0, 10));
+      setModelUsed(data.modelUsed || '');
+      setClientScanId(crypto.randomUUID());
+      if (data.extractionFailed) {
+        setError('Could not read the page automatically — type the lines in below instead.');
+      }
+    } catch (e) {
+      // Even a hard failure (network down, etc.) still opens an empty flat
+      // page rather than leaving the trader stuck on a spinner.
+      setFlatRows([{ description: '', quantity: 1, amount: '' }]);
+      setLedgerDate(new Date().toISOString().slice(0, 10));
+      setClientScanId(crypto.randomUUID());
+      setError(e.message || 'Could not reach the server — type the lines in below instead.');
+    } finally {
+      setTranscribing(false);
+    }
+  };
+
+  const updateFlatRow = (idx, key, val) => setFlatRows(rows => rows.map((r, i) => i === idx ? { ...r, [key]: val } : r));
+  const addFlatRow = () => setFlatRows(rows => [...rows, { description: '', quantity: 1, amount: '' }]);
+  const removeFlatRow = (idx) => setFlatRows(rows => rows.filter((_, i) => i !== idx));
+
+  const flatPageTotal = (flatRows || []).reduce((sum, r) => sum + (Number(r.amount) || 0), 0);
+
+  // STAGE 2 kickoff — "Continue" from the flat page. No AI vision call:
+  // just inventory matching + category/expiry inference against whatever
+  // the trader confirmed on the flat page. This is what used to be
+  // handleParse, adapted to read from flatRows instead of the raw photo.
+  const handleContinueToReview = async () => {
+    setError('');
+    const cleanRows = (flatRows || []).filter(r => r.description && r.description.trim());
+    if (cleanRows.length === 0) return setError('Add at least one line before continuing');
+    if (!ledgerDate) return setError('Set the date this page is from');
+
     setParsing(true);
     try {
-      let body;
-      if (inputMode === 'photo') {
-        // Already compressed client-side at selection time — this is the
-        // small JPEG, not the original multi-MB camera capture.
-        body = { imageBase64: compressedInfo.base64, mediaType: compressedInfo.mediaType, mode };
-      } else {
-        body = { text: raw, mode };
-      }
-
+      const body = {
+        rows: cleanRows.map(r => ({ description: r.description.trim(), quantity: Number(r.quantity) || 1, amount: r.amount === '' ? null : Number(r.amount) })),
+        mode, ledgerDate,
+      };
       const data = await apiRequest(apiUrl, '/ocr/parse-page', { method: 'POST', token, body });
 
-      // Map the backend's AI-extracted rows onto this business's actual
-      // inventory (dbId is the backend's UUID, item.id is the frontend SKU).
-      const results = (data.rows || []).map(row => {
+      const results = (data.rows || []).map((row, i) => {
         const matchedItem = row.matchedItem
-          ? inventory.find(i => i.dbId === row.matchedItem.id) || null
+          ? inventory.find(inv => inv.dbId === row.matchedItem.id) || null
           : null;
-        const match = matchedItem ? { item: matchedItem, confidence: row.matchedItem.confidence } : null;
-        // Rough per-unit estimate — the page usually shows a line total, not
-        // a unit figure, so divide it back out by quantity. In Stock Arrival
-        // mode this is what was paid to the supplier (cost); in Recording
-        // Sales mode it's what the customer paid (sale price). Same raw
-        // number, different meaning depending on which ledger this is.
+        const match = matchedItem ? { item: matchedItem, confidence: row.matchedItem.confidence, viaAlias: !!row.matchedItem.viaAlias } : null;
         const qty = row.quantity || 1;
         const estUnitAmount = row.amountOnPage ? Math.round(row.amountOnPage / qty) : '';
+        // Cost/sale price the trader may have already typed on the flat
+        // page for this exact line — carried forward so nothing has to be
+        // re-entered on the review screen.
+        const flatSrc = cleanRows[i] || {};
         return {
           rawLine: row.rawDescription,
           overrideQty: qty,
+          // The page's own line total — preserved exactly as extracted, so
+          // committing later can use it as-is rather than recomputing a
+          // total through a rounded unit price (the source of the
+          // ₦75,251-vs-₦75,250 drift this rebuild set out to fix).
+          amountOnPage: row.amountOnPage != null ? row.amountOnPage : null,
           suggestedCategory: row.suggestedCategory || '',
           suggestedExpiryDate: row.suggestedExpiryDate || '',
           suggestedBatchNumber: row.suggestedBatchNumber || '',
-          suggestedUnitCost: mode === 'stock' ? estUnitAmount : '',
+          suggestedUnitCost: mode === 'stock' ? (flatSrc.costPrice || estUnitAmount) : '',
           match,
           confirmed: !!match && !row.needsReview,
           creating: false,
-          // Present only when the receipt's own implied price for a
-          // MATCHED item differs meaningfully from what's on file.
-          // priceResolution starts null (unresolved, purely informational
-          // — never blocks confirming the sale); 'keep' or 'update' once
-          // the trader has actually looked at it and picked one.
           priceMismatch: row.priceMismatch || null,
           priceResolution: null,
           newDraft: {
             name: row.rawDescription, category: row.suggestedCategory || '',
-            price: mode === 'sales' ? estUnitAmount : '',
-            cost: mode === 'stock' ? estUnitAmount : '',
+            price: mode === 'sales' ? (flatSrc.salePrice || estUnitAmount) : '',
+            cost: mode === 'stock' ? (flatSrc.costPrice || estUnitAmount) : (flatSrc.costPrice || ''),
             expiryDate: row.suggestedExpiryDate || '', batchNumber: row.suggestedBatchNumber || '',
           },
         };
       });
       setParsed(results);
       setDone(false);
-      setModelUsed(data.modelUsed || '');
-      setLedgerDate(data.ledgerDate || null);
+      setModelUsed(data.modelUsed || modelUsed);
     } catch (e) {
-      // e.debug (present on OCR errors) is diagnostic detail for logs, not
-      // for the screen — surfacing it here is what used to show the raw
-      // partial/truncated model output right in the UI. The backend's own
-      // e.message is already the clean, user-facing copy for every case
-      // (busy, truncated, unparseable, etc.) — show that and nothing else.
-      setError(e.message || 'Could not parse the ledger entry');
-      if (e.debug) console.warn('[ocr] parse error detail:', e.debug);
+      setError(e.message || 'Could not process the entries');
+      if (e.debug) console.warn('[ocr] parse-page error detail:', e.debug);
     } finally {
       setParsing(false);
     }
@@ -3490,43 +3560,27 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
   const cancelCreating = (idx) => setParsed(p => p.map((r, i) => i === idx ? { ...r, creating: false } : r));
   const updateNewDraft = (idx, key, val) => setParsed(p => p.map((r, i) => i === idx ? { ...r, newDraft: { ...r.newDraft, [key]: val } } : r));
 
+  // Mode-aware: a new Stock Arrival item is ready once it has a cost (that's
+  // what a delivery ledger actually records), a new Sale is ready once it
+  // has a sale price. Previously this always checked newDraft.price even in
+  // Stock Arrival mode, where that field is never populated.
   const isRowReady = (r) => r.creating
-    ? !!(r.newDraft.name && r.newDraft.name.trim() && Number(r.newDraft.price) > 0)
+    ? !!(r.newDraft.name && r.newDraft.name.trim() && (mode === 'stock' ? Number(r.newDraft.cost) > 0 : Number(r.newDraft.price) > 0))
     : !!(r.confirmed && r.match);
 
-  // Best available per-unit price for a row, regardless of whether it's
-  // matched/confirmed yet: a confirmed match uses that item's real sale
-  // price; anything else falls back to newDraft.price, which is already
-  // pre-filled from the amount extracted off the page at parse time (see
-  // handleParse above) — this is what was missing before: an unmatched row
-  // showed NO price at all until the trader tapped "Create as new item",
-  // even though the backend had already extracted one straight off the
-  // receipt. isConfirmedPrice distinguishes "this is the real recorded
-  // price" (teal) from "this is a suggestion read off the photo, not yet
-  // saved anywhere" (amber) so the two don't look identically authoritative.
+  // Best available per-unit figure for a row — sale price in Recording
+  // Sales mode, cost price in Stock Arrival mode (previously always read
+  // .price, which is blank for a Stock Arrival draft).
   const rowUnitPrice = (r) => {
-    if (r.creating) return { amount: Number(r.newDraft.price) || 0, isConfirmedPrice: false };
-    if (r.match) return { amount: Number(r.match.item.price) || 0, isConfirmedPrice: true };
-    return { amount: Number(r.newDraft.price) || 0, isConfirmedPrice: false };
+    if (r.creating) return { amount: Number(mode === 'stock' ? r.newDraft.cost : r.newDraft.price) || 0, isConfirmedPrice: false };
+    if (r.match) return { amount: Number(mode === 'stock' ? (r.suggestedUnitCost || r.match.item.cost) : r.match.item.price) || 0, isConfirmedPrice: true };
+    return { amount: Number(mode === 'stock' ? r.suggestedUnitCost : r.newDraft.price) || 0, isConfirmedPrice: false };
   };
   const rowLineTotal = (r) => rowUnitPrice(r).amount * (Number(r.overrideQty) || 0);
 
-  // Two different totals, shown in two different places on purpose:
-  // pageTotal is everything visible on the page right now (matched,
-  // unmatched-with-a-suggested-price, or mid-edit) — this is what lets the
-  // trader sanity-check against the total written at the bottom of their
-  // own receipt, even before confirming anything. readyTotal is only the
-  // rows that will actually be saved if they tap Confirm right now — shown
-  // on the button itself, so the two numbers can never be confused for
-  // each other.
   const pageTotal = (parsed || []).reduce((sum, r) => sum + rowLineTotal(r), 0);
   const readyTotal = (parsed || []).filter(isRowReady).reduce((sum, r) => sum + rowLineTotal(r), 0);
 
-  // 'keep' just acknowledges the flag (no data changes — the recorded
-  // price keeps being used, same as if nothing were flagged at all).
-  // 'update' persists the receipt's price onto the actual inventory item
-  // via the same saveItem path Inventory's own edit form uses, then
-  // reflects it immediately in this row so the line re-totals right away.
   const resolvePriceMismatch = async (idx, action) => {
     const row = parsed[idx];
     if (!row || !row.priceMismatch) return;
@@ -3542,11 +3596,6 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
     ));
   };
 
-  // Soft, non-blocking nudge only — if this page's own dated total roughly
-  // matches revenue already recorded for that same calendar day, it's
-  // probably the same page being scanned twice rather than a coincidence.
-  // Never blocks Confirm — ledger-first means the trader's own judgment
-  // always wins; this is a heads-up, not a gate.
   const duplicateDayWarning = useMemo(() => {
     if (!ledgerDate || !parsed || mode !== 'sales') return null;
     const existingTotal = (sales || [])
@@ -3560,72 +3609,81 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
     return null;
   }, [ledgerDate, parsed, sales, pageTotal, mode]);
 
+  // ATOMIC COMMIT — one request, whole batch succeeds or nothing is saved.
+  // Replaces the old per-row onRecordSales/onAddStock/onReceiveStock loop
+  // entirely. clientScanId makes a retry (bad network, double-tap) safe:
+  // the server recognizes the same scan and replays the same result
+  // instead of double-recording anything, so this is safe to just call
+  // again on failure without any special retry logic here.
   const handleCommit = async () => {
-    const toCommit = parsed.filter(isRowReady);
+    let toCommit = parsed.filter(isRowReady);
     if (toCommit.length === 0) return setError('Nothing ready to record yet');
-    setCommitting(true); setError('');
-    // Tracks items created earlier in this same commit loop — if the same
-    // new product appears on two lines of one scanned page, the second line
-    // restocks the first instead of creating a duplicate item.
-    const createdThisBatch = [];
-    try {
-      for (const row of toCommit) {
-        if (row.creating) {
-          const normName = row.newDraft.name.trim().toLowerCase();
-          const dupe = createdThisBatch.find(c => c.name.trim().toLowerCase() === normName);
-          if (dupe) {
-            if (mode === 'sales') {
-              await onRecordSales(dupe.id, row.overrideQty, payment, deductStock);
-            } else {
-              const updated = await onAddStock({ ...dupe, stock: dupe.stock + row.overrideQty });
-              if (updated) createdThisBatch[createdThisBatch.indexOf(dupe)] = updated;
-            }
-          } else if (mode === 'sales') {
-            // A sale for a product that isn't in inventory yet, straight off
-            // a photo of the sales book — this is the core "just snap it"
-            // case: create the product itself (no baseline stock, since we
-            // genuinely don't know how much was on hand — this is the first
-            // the system is learning about it), then log the sale through
-            // the same non-blocking path as any other sale, which is free
-            // to take stock negative or skip deduction per the toggle above.
-            const created = await onAddStock({
-              isNew: true, name: row.newDraft.name.trim(), category: row.newDraft.category || '',
-              price: Number(row.newDraft.price) || 0, cost: Number(row.newDraft.cost) || 0, stock: 0,
-              warehouseStock: 0, reorder: 0, brand: '', size: '', origin: '',
-              expiryDate: row.newDraft.expiryDate || '', batchNumber: row.newDraft.batchNumber || '',
-              stockTracked: false,
-            });
-            if (created) {
-              createdThisBatch.push(created);
-              await onRecordSales(created.id, row.overrideQty, payment, deductStock);
-            }
-          } else {
-            // Stock Arrival — the parsed quantity IS what physically arrived,
-            // so it becomes the item's real initial stock straight away.
-            const created = await onAddStock({
-              isNew: true, name: row.newDraft.name.trim(), category: row.newDraft.category || '',
-              price: Number(row.newDraft.price) || 0, cost: Number(row.newDraft.cost) || 0, stock: row.overrideQty,
-              warehouseStock: 0, reorder: 0, brand: '', size: '', origin: '',
-              expiryDate: row.newDraft.expiryDate || '', batchNumber: row.newDraft.batchNumber || '',
-            });
-            if (created) createdThisBatch.push(created);
-          }
-        } else if (mode === 'sales') {
-          await onRecordSales(row.match.item.id, row.overrideQty, payment, deductStock);
-        } else {
-          // Stock Arrival, matched existing item — receive-stock recalculates
-          // cost as a weighted average if this delivery's price differs from
-          // what's on file (rather than leaving cost frozen at whatever it
-          // was when the item was first added), and fills expiry/batch only
-          // if the item doesn't already have one — never silently overwrites
-          // real existing data, since this model tracks one expiry per item,
-          // not per batch.
-          await onReceiveStock(row.match.item, row.overrideQty, row.suggestedUnitCost || null, row.suggestedExpiryDate, row.suggestedBatchNumber);
-        }
+
+    // Same-name dedupe within one batch — if two lines on the page both
+    // create the same new product, merge them into one line (summed qty)
+    // rather than asking the backend to create the item twice.
+    const merged = [];
+    for (const row of toCommit) {
+      if (row.creating) {
+        const normName = row.newDraft.name.trim().toLowerCase();
+        const dupe = merged.find(m => m.creating && m.newDraft.name.trim().toLowerCase() === normName);
+        if (dupe) { dupe.overrideQty += row.overrideQty; dupe.amountOnPage = (dupe.amountOnPage || 0) + (row.amountOnPage || 0); continue; }
       }
-      setDone(true); setRaw(''); setParsed(null); clearPhoto();
+      merged.push(row);
+    }
+    toCommit = merged;
+
+    setCommitting(true); setError('');
+    try {
+      const rows = toCommit.map(row => {
+        const { amount: unitPrice } = rowUnitPrice(row);
+        const amountOnPage = row.amountOnPage != null ? row.amountOnPage : unitPrice * row.overrideQty;
+        if (row.creating) {
+          return {
+            isNew: true,
+            description: row.newDraft.name.trim(),
+            quantity: row.overrideQty,
+            unitPrice,
+            amountOnPage,
+            paymentMethod: payment,
+            newItemData: {
+              category: row.newDraft.category || null,
+              costPrice: Number(row.newDraft.cost) || 0,
+              salePrice: Number(row.newDraft.price) || 0,
+            },
+          };
+        }
+        return {
+          itemId: row.match.item.dbId,
+          description: row.rawLine,
+          quantity: row.overrideQty,
+          unitPrice,
+          amountOnPage,
+          paymentMethod: payment,
+          // A rename the trader accepted (matched item's real name differs
+          // from what the page actually said) — saved server-side as a
+          // remembered alias so the next scan matches instantly.
+          confirmedAlias: row.rawLine.trim().toLowerCase() !== row.match.item.name.trim().toLowerCase(),
+        };
+      });
+
+      const rawText = (flatRows || []).map(r => `${r.quantity} ${r.description} ₦${r.amount || ''}`).join('\n');
+      await apiRequest(apiUrl, '/ocr/commit', {
+        method: 'POST', token,
+        body: { rows, mode, ledgerDate, rawText, modelUsed, clientScanId },
+      });
+
+      // Authoritative refresh — new items, updated stock, updated cost
+      // averages, all just came from a server-side transaction; re-fetch
+      // rather than hand-patch local state row by row.
+      if (onRefresh) await onRefresh();
+      setDone(true);
+      startOverCompletely();
     } catch (e) {
-      setError(e.message || 'Could not record entries');
+      // Deliberately does NOT reset state on failure — clientScanId is
+      // unchanged, so simply tapping the button again is a safe, correctly
+      // idempotent retry, not a duplicate submission.
+      setError(e.message || 'Could not save the page — nothing was recorded, try again');
     } finally {
       setCommitting(false);
     }
@@ -3654,11 +3712,12 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
 
       <div style={{ display: 'flex', background: C.panel, borderRadius: 8, border: `1px solid ${C.line}`, padding: 3, marginBottom: 12, width: 'fit-content' }}>
         {[['sales', 'Recording Sales'], ['stock', 'Stock Arrival']].map(([m, label]) => (
-          <button key={m} onClick={() => setMode(m)} style={{ padding: '7px 16px', borderRadius: 6, border: 'none', cursor: 'pointer', background: mode === m ? C.amber : 'transparent', color: mode === m ? C.ink : C.paperDim, fontFamily: FONT_BODY, fontWeight: 600, fontSize: 12 }}>{label}</button>
+          <button key={m} disabled={!!flatRows || !!parsed} onClick={() => setMode(m)} style={{ padding: '7px 16px', borderRadius: 6, border: 'none', cursor: (flatRows || parsed) ? 'default' : 'pointer', opacity: (flatRows || parsed) ? 0.5 : 1, background: mode === m ? C.amber : 'transparent', color: mode === m ? C.ink : C.paperDim, fontFamily: FONT_BODY, fontWeight: 600, fontSize: 12 }}>{label}</button>
         ))}
       </div>
 
-      {!parsed && (
+      {/* ---------------- INPUT (before stage 1 has run) ---------------- */}
+      {!flatRows && !parsed && (
         <>
           <div style={{ display: 'flex', background: C.panel, borderRadius: 8, border: `1px solid ${C.line}`, padding: 3, marginBottom: 14 }}>
             {inputToggleBtn('text', 'Paste text', Type)}
@@ -3703,25 +3762,142 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
               )}
             </div>
           )}
+          {blurWarning && compressedInfo && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, padding: '8px 10px', borderRadius: 8, background: `${C.amber}14`, border: `1px solid ${C.amber}55` }}>
+              <AlertTriangle size={13} color={C.amber} style={{ flexShrink: 0 }} />
+              <span style={{ fontSize: 11, color: C.paper }}>This photo might be a bit blurry — you can still read it, or retake it for a cleaner result.</span>
+            </div>
+          )}
 
           {error && <div style={{ color: C.red, fontSize: 12, marginTop: 10 }}>{error}</div>}
 
           <button
-            onClick={handleParse}
-            disabled={parsing || compressing || (inputMode === 'text' ? !raw.trim() : !compressedInfo)}
+            onClick={handleTranscribe}
+            disabled={transcribing || compressing || (inputMode === 'text' ? !raw.trim() : !compressedInfo)}
             style={{
               width: '100%', marginTop: 12, padding: '12px 0', borderRadius: 8, border: 'none',
-              background: parsing ? C.line : ((inputMode === 'text' ? raw.trim() : compressedInfo) ? C.amber : C.line),
+              background: transcribing ? C.line : ((inputMode === 'text' ? raw.trim() : compressedInfo) ? C.amber : C.line),
               color: (inputMode === 'text' ? raw.trim() : compressedInfo) ? C.ink : C.paperDim,
               fontFamily: FONT_BODY, fontWeight: 700, fontSize: 14,
               cursor: (inputMode === 'text' ? raw.trim() : compressedInfo) ? 'pointer' : 'default',
             }}
           >
-            {parsing ? PARSING_MESSAGES[parsingMessageIdx] : compressing ? 'Preparing photo…' : 'Parse entries'}
+            {transcribing ? TRANSCRIBING_MESSAGES[transcribingMsgIdx] : compressing ? 'Preparing photo…' : 'Read entries'}
           </button>
         </>
       )}
 
+      {/* ---------------- STAGE 1: flat, ruled-notebook editable page ---------------- */}
+      {flatRows && !parsed && (
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+            <div style={{ fontFamily: FONT_DISPLAY, fontSize: 14, textTransform: 'uppercase', letterSpacing: '0.03em', color: C.paper }}>Check the page</div>
+            <button onClick={startOverCompletely} style={{ fontSize: 11, color: C.paperDim, background: 'none', border: 'none', cursor: 'pointer' }}>← Start over</button>
+          </div>
+          <div style={{ fontSize: 11.5, color: C.paperDim, marginBottom: 10 }}>
+            Fix any names, quantities or amounts before matching runs — this is exactly what's on the page, nothing's saved yet.
+          </div>
+
+          {photoPreview && (
+            <img src={photoPreview} alt="Ledger page" style={{ width: '100%', maxHeight: 180, objectFit: 'contain', borderRadius: 8, border: `1px solid ${C.line}`, background: C.ink, marginBottom: 10 }} />
+          )}
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+            <Clock size={13} color={C.amber} />
+            <span style={{ fontSize: 11, color: C.paperDim }}>Dated:</span>
+            <input
+              type="date" value={ledgerDate || ''} onChange={e => setLedgerDate(e.target.value)}
+              style={{ padding: '5px 8px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.panel, color: C.amber, fontFamily: FONT_MONO, fontSize: 12, fontWeight: 700 }}
+            />
+            <span style={{ fontSize: 10, color: C.paperDim, fontStyle: 'italic' }}>— change this if you're catching up on an older page</span>
+          </div>
+
+          {/* Ruled-paper look: a repeating horizontal-line background behind
+              a plain rows-and-columns table, per the "just looks like the
+              real page" brief. */}
+          <div style={{
+            borderRadius: 8, border: `1px solid ${C.line}`, background: `${C.panel} repeating-linear-gradient(to bottom, transparent, transparent 32px, ${C.line}55 33px)`,
+            padding: '6px 8px', marginBottom: 10,
+          }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '40px 1fr 90px', gap: 6, padding: '4px 2px', fontSize: 9.5, color: C.paperDim, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+              <span>Qty</span><span>Item</span><span style={{ textAlign: 'right' }}>Amount</span>
+            </div>
+            {flatRows.map((row, idx) => {
+              const qm = row.description.trim() ? quickMatch(row.description) : null;
+              const isConfidentMatch = qm && qm.confidence >= 0.6;
+              // Cost price: shown on EVERY row in Stock Arrival mode (a
+              // delivery always needs a cost), and only on rows without a
+              // confident match in Sales mode (a matched item already has
+              // a known cost — asking again is just noise).
+              const showCost = mode === 'stock' || (mode === 'sales' && !isConfidentMatch);
+              const showSale = mode === 'sales' && !isConfidentMatch;
+              return (
+                <div key={idx} style={{ padding: '5px 2px', borderTop: idx > 0 ? `1px solid ${C.line}33` : 'none' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '40px 1fr 90px', gap: 6, alignItems: 'center' }}>
+                    <input
+                      type="number" min={1} value={row.quantity}
+                      onChange={e => updateFlatRow(idx, 'quantity', Math.max(1, Number(e.target.value) || 1))}
+                      style={{ width: '100%', padding: '5px 4px', borderRadius: 5, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_MONO, fontSize: 13, textAlign: 'center' }}
+                    />
+                    <input
+                      value={row.description} placeholder="Item name"
+                      onChange={e => updateFlatRow(idx, 'description', e.target.value)}
+                      style={{ width: '100%', padding: '5px 7px', borderRadius: 5, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_BODY, fontSize: 13.5 }}
+                    />
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <input
+                        type="number" value={row.amount} placeholder="0"
+                        onChange={e => updateFlatRow(idx, 'amount', e.target.value)}
+                        style={{ width: '100%', padding: '5px 6px', borderRadius: 5, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_MONO, fontSize: 13, textAlign: 'right' }}
+                      />
+                      <button onClick={() => removeFlatRow(idx)} style={{ background: 'none', border: 'none', color: C.paperDim, cursor: 'pointer', padding: 2, flexShrink: 0 }}><X size={13} /></button>
+                    </div>
+                  </div>
+                  {row.description.trim() && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4, paddingLeft: 46, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: 9.5, color: isConfidentMatch ? C.teal : C.paperDim }}>
+                        {isConfidentMatch ? `✓ matches ${qm.item.name}` : 'new item'}
+                      </span>
+                      {showCost && (
+                        <input
+                          type="number" value={row.costPrice || ''} placeholder="Cost price ₦"
+                          onChange={e => updateFlatRow(idx, 'costPrice', e.target.value)}
+                          style={{ width: 96, padding: '3px 6px', borderRadius: 5, border: `1px solid ${C.line}55`, background: 'transparent', color: C.paperDim, fontFamily: FONT_MONO, fontSize: 10.5 }}
+                        />
+                      )}
+                      {showSale && (
+                        <input
+                          type="number" value={row.salePrice || ''} placeholder="Sale price ₦"
+                          onChange={e => updateFlatRow(idx, 'salePrice', e.target.value)}
+                          style={{ width: 96, padding: '3px 6px', borderRadius: 5, border: `1px solid ${C.line}55`, background: 'transparent', color: C.paperDim, fontFamily: FONT_MONO, fontSize: 10.5 }}
+                        />
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+            <button onClick={addFlatRow} style={{ width: '100%', marginTop: 6, padding: '6px 0', borderRadius: 6, border: `1px dashed ${C.line}`, background: 'transparent', color: C.paperDim, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>+ Add line</button>
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', borderRadius: 8, background: `${C.teal}14`, border: `1px solid ${C.teal}55`, marginBottom: 12 }}>
+            <span style={{ fontSize: 11, color: C.paperDim, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Page total</span>
+            <span style={{ fontFamily: FONT_MONO, fontSize: 18, fontWeight: 700, color: C.teal }}>{naira(flatPageTotal)}</span>
+          </div>
+
+          {error && <div style={{ color: C.red, fontSize: 12, marginBottom: 10 }}>{error}</div>}
+
+          <button
+            onClick={handleContinueToReview}
+            disabled={parsing}
+            style={{ width: '100%', padding: '12px 0', borderRadius: 8, border: 'none', background: parsing ? C.line : C.amber, color: parsing ? C.paperDim : C.ink, fontFamily: FONT_BODY, fontWeight: 700, fontSize: 14, cursor: parsing ? 'default' : 'pointer' }}
+          >
+            {parsing ? 'Matching to your inventory…' : 'Continue'}
+          </button>
+        </div>
+      )}
+
+      {/* ---------------- STAGE 2: review (unchanged) ---------------- */}
       {parsed && !done && (
         <div
           style={{
@@ -3736,7 +3912,7 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
           }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
             <div style={{ fontFamily: FONT_DISPLAY, fontSize: 15, textTransform: 'uppercase', letterSpacing: '0.03em', color: C.paper }}>Review before saving</div>
-            <button onClick={() => setParsed(null)} style={{ fontSize: 11, color: C.paperDim, background: 'none', border: 'none', cursor: 'pointer' }}>← Start over</button>
+            <button onClick={() => setParsed(null)} style={{ fontSize: 11, color: C.paperDim, background: 'none', border: 'none', cursor: 'pointer' }}>← Back to page</button>
           </div>
           <div style={{ fontSize: 12, color: C.paperDim, marginBottom: 4 }}>
             {parsed.length} line{parsed.length !== 1 ? 's' : ''} extracted — nothing is saved to your ledger until you confirm below. Check names, quantities and prices carefully.
@@ -3747,9 +3923,6 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
             </div>
           )}
 
-          {/* Ledger date — prominent, right next to Total Sales, so the
-              trader can see at a glance which day this page is dated, not
-              just how much it adds up to. */}
           {ledgerDate && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
               <Clock size={13} color={C.amber} />
@@ -3757,8 +3930,6 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
             </div>
           )}
 
-          {/* Soft, non-blocking nudge that this page's total looks close to
-              a day's revenue already on record — never blocks Confirm. */}
           {duplicateDayWarning && (
             <div style={{ background: `${C.red}14`, border: `1px solid ${C.red}55`, borderRadius: 8, padding: '10px 12px', marginBottom: 10, display: 'flex', alignItems: 'flex-start', gap: 8 }}>
               <AlertTriangle size={14} color={C.red} style={{ flexShrink: 0, marginTop: 1 }} />
@@ -3766,12 +3937,6 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
             </div>
           )}
 
-          {/* Total Sales — pinned near the top, bold. Reflects EVERY line
-              currently visible with a price (matched or just suggested from
-              the photo), so it can be checked against the total written at
-              the bottom of the actual receipt even before anything is
-              confirmed. The Confirm button below shows the separate,
-              smaller "will actually be saved" total. */}
           <div style={{
             position: 'sticky', top: 0, zIndex: 5, background: C.ink, paddingBottom: 10, marginBottom: 12,
             borderBottom: `1px solid ${C.line}`,
@@ -3780,7 +3945,7 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
               display: 'flex', justifyContent: 'space-between', alignItems: 'center',
               background: `${C.teal}14`, border: `1px solid ${C.teal}55`, borderRadius: 10, padding: '12px 14px',
             }}>
-              <span style={{ fontSize: 12, color: C.paperDim, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Total Sales</span>
+              <span style={{ fontSize: 12, color: C.paperDim, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{mode === 'stock' ? 'Total Cost' : 'Total Sales'}</span>
               <span style={{ fontFamily: FONT_MONO, fontSize: 22, fontWeight: 700, color: C.teal }}>{naira(pageTotal)}</span>
             </div>
           </div>
@@ -3792,19 +3957,14 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
               const { amount: unitPrice, isConfirmedPrice } = rowUnitPrice(row);
               return (
                 <div key={idx} style={{ background: C.panel, border: `1px solid ${borderColor}`, borderRadius: 10, padding: '12px 14px' }}>
-                  {/* Headline: item name big, raw OCR text demoted to a small caption underneath */}
                   <div style={{ fontSize: 14, fontWeight: 700, color: C.paper, marginBottom: 1 }}>
                     {row.creating ? (row.newDraft.name || 'New item') : row.match ? row.match.item.name : row.rawLine}
                   </div>
-                  <div style={{ fontSize: 10, color: C.paperDim, fontFamily: FONT_MONO, marginBottom: 8 }}>from: "{row.rawLine}"</div>
+                  <div style={{ fontSize: 10, color: C.paperDim, fontFamily: FONT_MONO, marginBottom: 8 }}>
+                    from: "{row.rawLine}"
+                    {row.match && row.match.viaAlias && <span style={{ color: C.teal }}> · remembered from a previous scan</span>}
+                  </div>
 
-                  {/* Qty × price → line total, shown for EVERY row with a
-                      known amount now, not just matched/creating ones — an
-                      unmatched row still has a price the backend read off
-                      the photo, and hiding it was the bug. Teal = a real,
-                      confirmed sale price (from an existing item's record);
-                      amber = a suggestion read straight off this photo,
-                      not saved or confirmed anywhere yet. */}
                   {!row.creating && unitPrice > 0 && (
                     <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 8, paddingBottom: 8, borderBottom: `1px solid ${C.line}` }}>
                       <span style={{ fontSize: 12, color: C.paperDim }}>
@@ -3815,11 +3975,6 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
                     </div>
                   )}
 
-                  {/* Price-mismatch flag — only for a MATCHED item whose
-                      receipt-implied price differs meaningfully from what's
-                      on file. Purely informational until the trader picks
-                      one; the sale still uses the recorded price either way
-                      unless "Update" is tapped. */}
                   {row.priceMismatch && !row.priceResolution && (
                     <div style={{ background: `${C.amber}14`, border: `1px solid ${C.amber}55`, borderRadius: 8, padding: '10px 12px', marginBottom: 8 }}>
                       <div style={{ fontSize: 12, color: C.paper, marginBottom: 8 }}>
@@ -3865,7 +4020,7 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
                           placeholder="Batch/lot (optional)" style={{ padding: '7px 9px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_BODY, fontSize: 13 }}
                         />
                       </div>
-                      {Number(row.newDraft.price) > 0 && (
+                      {lineTotal > 0 && (
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, fontSize: 12 }}>
                           <span style={{ color: C.paperDim }}>Line total</span>
                           <span style={{ fontFamily: FONT_MONO, fontWeight: 700, color: C.teal }}>{naira(lineTotal)}</span>
@@ -3902,10 +4057,6 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
                         </div>
                       )}
 
-                      {/* Matching UI shrunk to a small text link instead of a
-                          full dropdown card on every row — and skipped
-                          entirely for a business with no inventory at all,
-                          since there's nothing to match against yet. */}
                       {inventory.length > 0 && (
                         <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${C.line}`, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                           {row.match ? (
