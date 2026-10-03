@@ -561,6 +561,9 @@ export default function TodayBread() {
         * { box-sizing: border-box; }
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
         .spin { animation: spin 1s linear infinite; }
+        @keyframes ticker-scroll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+        .ticker-track { animation: ticker-scroll 22s linear infinite; }
+        .ticker-track:hover { animation-play-state: paused; }
         ::-webkit-scrollbar { height: 0; width: 0; }
         body {
           background-color: #14151A;
@@ -951,40 +954,56 @@ function TickerBar({ fmtTime, rates, rateLoading, rateError, onRefresh }) {
   const usdTrend = rates ? trend(rates.usdNgn, rates.prevUsdNgn) : null;
   const cnyTrend = rates ? trend(rates.cnyNgn, rates.prevCnyNgn) : null;
 
-  const Cell = ({ label, value, sub }) => (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', minWidth: 76, flexShrink: 0 }}>
+  // Up = teal, down = red — reusing the palette's existing positive/negative
+  // colors rather than introducing a new green, so this still reads as the
+  // same app, just with the exchange-board motion/contrast added.
+  const trendColor = (t) => t === 'up' ? C.teal : t === 'down' ? C.red : C.paperDim;
+
+  const Cell = ({ label, value, sub, trendVal }) => (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', minWidth: 76, flexShrink: 0, padding: '0 14px', borderRight: `1px solid ${C.line}` }}>
       <div style={{ fontFamily: FONT_BODY, fontSize: 9, letterSpacing: '0.12em', color: C.paperDim, textTransform: 'uppercase' }}>{label}</div>
-      <div style={{ fontFamily: FONT_MONO, fontSize: 14, color: C.amber, fontWeight: 600, marginTop: 2 }}>{value}</div>
-      {sub && <div style={{ fontFamily: FONT_MONO, fontSize: 9, color: C.paperDim }}>{sub}</div>}
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 4, marginTop: 2 }}>
+        <span style={{ fontFamily: FONT_MONO, fontSize: 14, color: C.amber, fontWeight: 600 }}>{value}</span>
+        {sub && <span style={{ fontFamily: FONT_MONO, fontSize: 10, fontWeight: 700, color: trendColor(trendVal) }}>{sub}</span>}
+      </div>
     </div>
+  );
+
+  // Rendered twice back-to-back inside a track that animates from 0% to
+  // -50% — since the two copies are identical, the loop point is invisible
+  // and the strip reads as scrolling continuously, exchange-board style.
+  const cells = (
+    <>
+      <Cell label="USD → NGN" value={rates ? `₦${rates.usdNgn.toFixed(0)}` : '—'} sub={usdTrend === 'up' ? '▲' : usdTrend === 'down' ? '▼' : rateError ? 'cached' : null} trendVal={usdTrend} />
+      <Cell label="CNY → NGN" value={rates ? `₦${rates.cnyNgn.toFixed(1)}` : '—'} sub={cnyTrend === 'up' ? '▲' : cnyTrend === 'down' ? '▼' : rateError ? 'cached' : null} trendVal={cnyTrend} />
+      <Cell label="Lagos" value={fmtTime('Africa/Lagos')} />
+      <Cell label="New York" value={fmtTime('America/New_York')} />
+      <Cell label="Shanghai" value={fmtTime('Asia/Shanghai')} />
+    </>
   );
 
   return (
     <div style={{
+      position: 'relative',
       background: '#0E0F12',
       backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='40'%3E%3Cpath d='M0 20 Q25 8 50 20 Q75 32 100 20 Q125 8 150 20 Q175 32 200 20' fill='none' stroke='rgba(242,169,59,0.06)' stroke-width='1'/%3E%3Cpath d='M0 28 Q25 16 50 28 Q75 40 100 28 Q125 16 150 28 Q175 40 200 28' fill='none' stroke='rgba(242,169,59,0.04)' stroke-width='1'/%3E%3Cpath d='M0 12 Q25 0 50 12 Q75 24 100 12 Q125 0 150 12 Q175 24 200 12' fill='none' stroke='rgba(242,169,59,0.03)' stroke-width='1'/%3E%3C/svg%3E")`,
       backgroundSize: '200px 40px',
+      // The thin red top edge is the one deliberate "exchange board" accent
+      // — everything else stays the app's existing amber/teal palette.
+      borderTop: `2px solid ${C.red}`,
       borderBottom: `1px solid ${C.line}`,
-      display: 'flex', alignItems: 'center', overflowX: 'auto',
-      padding: '8px 12px', gap: 18,
+      display: 'flex', alignItems: 'center',
+      overflow: 'hidden',
     }}>
-      <Cell
-        label="USD → NGN"
-        value={rates ? `₦${rates.usdNgn.toFixed(0)}` : '—'}
-        sub={usdTrend === 'up' ? '▲' : usdTrend === 'down' ? '▼' : rateError ? 'cached' : ' '}
-      />
-      <Cell
-        label="CNY → NGN"
-        value={rates ? `₦${rates.cnyNgn.toFixed(1)}` : '—'}
-        sub={cnyTrend === 'up' ? '▲' : cnyTrend === 'down' ? '▼' : rateError ? 'cached' : ' '}
-      />
-      <div style={{ width: 1, height: 28, background: C.line, flexShrink: 0 }} />
-      <Cell label="Lagos" value={fmtTime('Africa/Lagos')} />
-      <Cell label="New York" value={fmtTime('America/New_York')} />
-      <Cell label="Shanghai" value={fmtTime('Asia/Shanghai')} />
+      <div style={{ flex: 1, overflow: 'hidden' }}>
+        <div className="ticker-track" style={{ display: 'flex', alignItems: 'center', padding: '8px 0', width: 'max-content' }}>
+          <div style={{ display: 'flex', alignItems: 'center' }}>{cells}</div>
+          <div style={{ display: 'flex', alignItems: 'center' }} aria-hidden="true">{cells}</div>
+        </div>
+      </div>
       <button
         onClick={onRefresh}
-        style={{ background: 'none', border: 'none', color: C.paperDim, cursor: 'pointer', flexShrink: 0, padding: 4 }}
+        style={{ background: '#0E0F12', border: 'none', borderLeft: `1px solid ${C.line}`, color: C.paperDim, cursor: 'pointer', flexShrink: 0, padding: '8px 12px', alignSelf: 'stretch' }}
         aria-label="Refresh rates"
       >
         <RefreshCw size={14} className={rateLoading ? 'spin' : ''} />
@@ -3345,6 +3364,12 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
   // state (extraction came back empty — the trader types the page by hand).
   const [flatRows, setFlatRows] = useState(null);
   const [transcribing, setTranscribing] = useState(false);
+  // True when the last /ocr/transcribe attempt didn't actually read
+  // anything (network failure or every AI vendor came back empty) — shows
+  // a "Try reading again" option on the flat page that reuses the SAME
+  // already-selected photo, instead of sending the trader back to the
+  // gallery/camera to re-pick it.
+  const [extractionFailed, setExtractionFailed] = useState(false);
   // Generated once when stage 1 opens and reused for every retry of the
   // SAME scan (parse-page and, especially, commit) — this is what makes a
   // retried commit after a lost response on bad market network idempotent
@@ -3406,6 +3431,15 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
     if (!file) return;
     setPhotoFile(file);
     setPhotoPreview(URL.createObjectURL(file));
+    await processPhotoFile(file);
+  };
+
+  // Pulled out of handlePhotoSelect so a failed compression can be retried
+  // against the SAME already-selected file — no re-picking from the
+  // gallery/camera needed. The photo (photoFile/photoPreview) is never
+  // cleared on failure anywhere in this component now; only an explicit
+  // "Remove" tap or "Start over" clears it.
+  const processPhotoFile = async (file) => {
     setError('');
     setCompressedInfo(null);
     setBlurWarning(false);
@@ -3419,8 +3453,7 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
       setBlurWarning(info.blurScore < BLUR_SCORE_MINIMUM);
       setCompressedInfo(info);
     } catch (err) {
-      setError(err.message || 'Could not process that photo — try another one');
-      setPhotoFile(null);
+      setError(err.message || 'Could not process that photo — tap "Try again" below, or choose a different one');
     } finally {
       setCompressing(false);
     }
@@ -3436,7 +3469,7 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
 
   const startOverCompletely = () => {
     setFlatRows(null); setParsed(null); setRaw(''); clearPhoto();
-    setLedgerDate(null); setModelUsed(''); setError(''); setClientScanId(null);
+    setLedgerDate(null); setModelUsed(''); setError(''); setClientScanId(null); setExtractionFailed(false);
   };
 
   // STAGE 1 kickoff — fast, vision-only extraction. Never surfaces a hard
@@ -3465,15 +3498,21 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
       setModelUsed(data.modelUsed || '');
       setClientScanId(crypto.randomUUID());
       if (data.extractionFailed) {
-        setError('Could not read the page automatically — type the lines in below instead.');
+        setExtractionFailed(true);
+        setError('Could not read the page automatically — try again below, or type the lines in directly.');
+      } else {
+        setExtractionFailed(false);
       }
     } catch (e) {
       // Even a hard failure (network down, etc.) still opens an empty flat
-      // page rather than leaving the trader stuck on a spinner.
-      setFlatRows([{ description: '', quantity: 1, amount: '' }]);
-      setLedgerDate(new Date().toISOString().slice(0, 10));
-      setClientScanId(crypto.randomUUID());
-      setError(e.message || 'Could not reach the server — type the lines in below instead.');
+      // page rather than leaving the trader stuck on a spinner — and the
+      // photo itself is untouched by this catch, so "Try again" below can
+      // resend the exact same image with no re-pick needed.
+      setFlatRows(rows => rows && rows.length > 0 ? rows : [{ description: '', quantity: 1, amount: '' }]);
+      setLedgerDate(d => d || new Date().toISOString().slice(0, 10));
+      setClientScanId(id => id || crypto.randomUUID());
+      setExtractionFailed(true);
+      setError(e.message || 'Could not reach the server — try again below, or type the lines in directly.');
     } finally {
       setTranscribing(false);
     }
@@ -3517,6 +3556,11 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
         return {
           rawLine: row.rawDescription,
           overrideQty: qty,
+          // Kept separate from overrideQty so displayTotal (below) can tell
+          // whether the trader has actually changed the quantity — the
+          // page's own amount is only trustworthy as-is while qty matches
+          // what the page originally said.
+          originalQty: qty,
           // The page's own line total — preserved exactly as extracted, so
           // committing later can use it as-is rather than recomputing a
           // total through a rounded unit price (the source of the
@@ -3560,6 +3604,17 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
   const cancelCreating = (idx) => setParsed(p => p.map((r, i) => i === idx ? { ...r, creating: false } : r));
   const updateNewDraft = (idx, key, val) => setParsed(p => p.map((r, i) => i === idx ? { ...r, newDraft: { ...r.newDraft, [key]: val } } : r));
 
+  // A row qualifies for the bulk "Quick-add all" action once it already has
+  // what it needs — name, quantity, and a price already guessed from the
+  // page — and just hasn't been individually flipped to "creating" yet.
+  // Deliberately scoped to unmatched rows only: a row that DID match an
+  // existing item still gets its own single-tap confirm, so a genuine
+  // mismatch doesn't get silently bulk-accepted alongside real new items.
+  const eligibleForQuickAdd = (r) => !r.match && !r.creating
+    && r.newDraft.name && r.newDraft.name.trim()
+    && (mode === 'stock' ? Number(r.newDraft.cost) > 0 : Number(r.newDraft.price) > 0);
+  const quickAddAllNew = () => setParsed(p => p.map(r => eligibleForQuickAdd(r) ? { ...r, creating: true, confirmed: false } : r));
+
   // Mode-aware: a new Stock Arrival item is ready once it has a cost (that's
   // what a delivery ledger actually records), a new Sale is ready once it
   // has a sale price. Previously this always checked newDraft.price even in
@@ -3578,8 +3633,18 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
   };
   const rowLineTotal = (r) => rowUnitPrice(r).amount * (Number(r.overrideQty) || 0);
 
-  const pageTotal = (parsed || []).reduce((sum, r) => sum + rowLineTotal(r), 0);
-  const readyTotal = (parsed || []).filter(isRowReady).reduce((sum, r) => sum + rowLineTotal(r), 0);
+  // The honest total for display — the page's own line amount, exactly as
+  // the flat page showed it, not recomputed through a rounded per-unit
+  // price (that recomputation is what produced ₦75,251 against a book that
+  // actually totals ₦75,250). Only trusted while the quantity is unchanged
+  // from what the page said; if the trader edits qty here, the page amount
+  // no longer applies to the new qty, so it falls back to unit price × qty.
+  const displayTotal = (r) => (r.amountOnPage != null && Number(r.overrideQty) === Number(r.originalQty))
+    ? r.amountOnPage
+    : rowLineTotal(r);
+
+  const pageTotal = (parsed || []).reduce((sum, r) => sum + displayTotal(r), 0);
+  const readyTotal = (parsed || []).filter(isRowReady).reduce((sum, r) => sum + displayTotal(r), 0);
 
   const resolvePriceMismatch = async (idx, action) => {
     const row = parsed[idx];
@@ -3650,6 +3715,10 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
               category: row.newDraft.category || null,
               costPrice: Number(row.newDraft.cost) || 0,
               salePrice: Number(row.newDraft.price) || 0,
+              // Only meaningfully used by businesses that track expiry
+              // (pharma and similar) — harmless null for everyone else.
+              expiryDate: row.newDraft.expiryDate || null,
+              batchNumber: row.newDraft.batchNumber || null,
             },
           };
         }
@@ -3660,6 +3729,10 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
           unitPrice,
           amountOnPage,
           paymentMethod: payment,
+          // Only applied server-side if the matched item doesn't already
+          // have one set — never overwrites an existing expiry/batch.
+          expiryDate: mode === 'stock' ? (row.suggestedExpiryDate || null) : null,
+          batchNumber: mode === 'stock' ? (row.suggestedBatchNumber || null) : null,
           // A rename the trader accepted (matched item's real name differs
           // from what the page actually said) — saved server-side as a
           // remembered alias so the next scan matches instantly.
@@ -3760,6 +3833,16 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
                   </div>
                 </div>
               )}
+              {!compressing && !compressedInfo && photoFile && (
+                // Compression failed — retry against the SAME file rather
+                // than sending the trader back to the gallery/camera.
+                <button
+                  onClick={() => processPhotoFile(photoFile)}
+                  style={{ width: '100%', marginTop: 8, padding: '9px 0', borderRadius: 8, border: 'none', background: C.amber, color: C.ink, fontWeight: 700, fontSize: 12.5, cursor: 'pointer' }}
+                >
+                  Try processing this photo again
+                </button>
+              )}
             </div>
           )}
           {blurWarning && compressedInfo && (
@@ -3800,6 +3883,20 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
 
           {photoPreview && (
             <img src={photoPreview} alt="Ledger page" style={{ width: '100%', maxHeight: 180, objectFit: 'contain', borderRadius: 8, border: `1px solid ${C.line}`, background: C.ink, marginBottom: 10 }} />
+          )}
+
+          {extractionFailed && (compressedInfo || raw.trim()) && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, padding: '8px 10px', borderRadius: 8, background: `${C.amber}14`, border: `1px solid ${C.amber}55` }}>
+              <AlertTriangle size={13} color={C.amber} style={{ flexShrink: 0 }} />
+              <span style={{ fontSize: 11, color: C.paper, flex: 1 }}>Reading didn't work last time.</span>
+              <button
+                onClick={handleTranscribe}
+                disabled={transcribing}
+                style={{ padding: '6px 12px', borderRadius: 6, border: 'none', background: C.amber, color: C.ink, fontWeight: 700, fontSize: 11, cursor: transcribing ? 'default' : 'pointer', whiteSpace: 'nowrap' }}
+              >
+                {transcribing ? 'Reading…' : 'Try again'}
+              </button>
+            </div>
           )}
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
@@ -3948,12 +4045,23 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
               <span style={{ fontSize: 12, color: C.paperDim, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{mode === 'stock' ? 'Total Cost' : 'Total Sales'}</span>
               <span style={{ fontFamily: FONT_MONO, fontSize: 22, fontWeight: 700, color: C.teal }}>{naira(pageTotal)}</span>
             </div>
+            {(() => {
+              const quickAddCount = parsed.filter(eligibleForQuickAdd).length;
+              return quickAddCount > 1 ? (
+                <button
+                  onClick={quickAddAllNew}
+                  style={{ width: '100%', marginTop: 8, padding: '10px 0', borderRadius: 8, border: `1px dashed ${C.amber}88`, background: `${C.amber}14`, color: C.amber, fontWeight: 700, fontSize: 12.5, cursor: 'pointer' }}
+                >
+                  + Quick-add all {quickAddCount} new items (name, qty & price already confirmed)
+                </button>
+              ) : null;
+            })()}
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
             {parsed.map((row, idx) => {
               const borderColor = row.creating ? C.amber + '55' : (row.match && row.confirmed) ? C.teal + '55' : !row.match ? C.red + '55' : C.line;
-              const lineTotal = rowLineTotal(row);
+              const lineTotal = displayTotal(row);
               const { amount: unitPrice, isConfirmedPrice } = rowUnitPrice(row);
               return (
                 <div key={idx} style={{ background: C.panel, border: `1px solid ${borderColor}`, borderRadius: 10, padding: '12px 14px' }}>
