@@ -1001,13 +1001,6 @@ function TickerBar({ fmtTime, rates, rateLoading, rateError, onRefresh }) {
           <div style={{ display: 'flex', alignItems: 'center' }} aria-hidden="true">{cells}</div>
         </div>
       </div>
-      <button
-        onClick={onRefresh}
-        style={{ background: '#0E0F12', border: 'none', borderLeft: `1px solid ${C.line}`, color: C.paperDim, cursor: 'pointer', flexShrink: 0, padding: '8px 12px', alignSelf: 'stretch' }}
-        aria-label="Refresh rates"
-      >
-        <RefreshCw size={14} className={rateLoading ? 'spin' : ''} />
-      </button>
     </div>
   );
 }
@@ -1322,11 +1315,11 @@ function TabBar({ role, tab, setTab, lowStockCount }) {
     ...(role === 'owner' ? [{ id: 'notebook', label: 'Snapshot', icon: ClipboardList }] : []),
     ...(role === 'owner' ? [{ id: 'reports', label: 'Today', icon: Wallet }] : []),
     ...(role === 'owner' ? [{ id: 'insights', label: 'Insights', icon: Sparkles }] : []),
+    ...(role === 'owner' ? [{ id: 'whatsapp', label: 'Connect & Subscription', icon: MessageCircle }] : []),
+    ...(role === 'owner' ? [{ id: 'staff', label: 'Staff', icon: Users }] : []),
     { id: 'analytics', label: 'Best Sellers', icon: BarChart3 },
     { id: 'sale', label: 'Record Sale', icon: ShoppingCart },
     { id: 'inventory', label: 'Inventory', icon: Package },
-    ...(role === 'owner' ? [{ id: 'whatsapp', label: 'Connect & Subscription', icon: MessageCircle }] : []),
-    ...(role === 'owner' ? [{ id: 'staff', label: 'Staff', icon: Users }] : []),
   ];
   return (
     <div style={{ display: 'flex', overflowX: 'auto', borderBottom: `1px solid ${C.line}`, maxWidth: 720, margin: '0 auto', padding: '0 16px' }}>
@@ -3340,6 +3333,20 @@ function compressImageForUpload(file, { maxDimension = 2200, quality = 0.85 } = 
 }
 
 function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSales, onAddStock, onReceiveStock, onRefresh }) {
+  // Matches the app's existing SyncBar pattern — silent when fine, visible
+  // only when there's an actual problem — rather than a permanent "online"
+  // badge, which would just be noise most of the time. Markets have poor
+  // network, so this is specifically about warning BEFORE a scan is
+  // attempted, not just reacting after a request already failed.
+  const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
+  useEffect(() => {
+    const goOnline = () => setIsOnline(true);
+    const goOffline = () => setIsOnline(false);
+    window.addEventListener('online', goOnline);
+    window.addEventListener('offline', goOffline);
+    return () => { window.removeEventListener('online', goOnline); window.removeEventListener('offline', goOffline); };
+  }, []);
+
   const [mode, setMode] = useState('sales'); // sales | stock
   const [inputMode, setInputMode] = useState('text'); // text | photo
   const [raw, setRaw] = useState('');
@@ -3385,6 +3392,11 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
   const [parsing, setParsing] = useState(false); // stage 2 (parse-page) in flight
   const [committing, setCommitting] = useState(false);
   const [done, setDone] = useState(false);
+  // Snapshot of what was actually just saved — captured right before
+  // startOverCompletely() wipes parsed/mode/ledgerDate, so the "done"
+  // screen can show real proof of what happened instead of an empty
+  // "success" screen that could just as easily mean nothing was recorded.
+  const [lastSaved, setLastSaved] = useState(null);
   const [error, setError] = useState('');
   const [modelUsed, setModelUsed] = useState('');
   // The date the PAGE itself is dated — editable throughout stage 1, and
@@ -3750,6 +3762,7 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
       // averages, all just came from a server-side transaction; re-fetch
       // rather than hand-patch local state row by row.
       if (onRefresh) await onRefresh();
+      setLastSaved({ count: toCommit.length, total: readyTotal, mode, ledgerDate });
       setDone(true);
       startOverCompletely();
     } catch (e) {
@@ -3782,6 +3795,13 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
           <div style={{ fontSize: 11, color: C.paperDim, marginTop: 2 }}>Photograph the sales book, or paste text from Google Lens — items and math are extracted automatically</div>
         </div>
       </div>
+
+      {!isOnline && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderRadius: 8, background: `${C.red}14`, border: `1px solid ${C.red}55`, marginBottom: 12 }}>
+          <WifiOff size={14} color={C.red} style={{ flexShrink: 0 }} />
+          <span style={{ fontSize: 11.5, color: C.paper }}>No connection right now — reading a new page will fail until it's back. Anything already on screen is safe and stays right here.</span>
+        </div>
+      )}
 
       <div style={{ display: 'flex', background: C.panel, borderRadius: 8, border: `1px solid ${C.line}`, padding: 3, marginBottom: 12, width: 'fit-content' }}>
         {[['sales', 'Recording Sales'], ['stock', 'Stock Arrival']].map(([m, label]) => (
@@ -3913,10 +3933,10 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
               a plain rows-and-columns table, per the "just looks like the
               real page" brief. */}
           <div style={{
-            borderRadius: 8, border: `1px solid ${C.line}`, background: `${C.panel} repeating-linear-gradient(to bottom, transparent, transparent 32px, ${C.line}55 33px)`,
-            padding: '6px 8px', marginBottom: 10,
+            borderRadius: 10, border: `1px solid ${C.line}`, background: `${C.panel} repeating-linear-gradient(to bottom, transparent, transparent 40px, ${C.line}55 41px)`,
+            padding: '8px 10px', marginBottom: 10,
           }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '40px 1fr 90px', gap: 6, padding: '4px 2px', fontSize: 9.5, color: C.paperDim, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '48px 1fr 104px', gap: 8, padding: '4px 4px 8px', fontSize: 10, color: C.paperDim, textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>
               <span>Qty</span><span>Item</span><span style={{ textAlign: 'right' }}>Amount</span>
             </div>
             {flatRows.map((row, idx) => {
@@ -3929,44 +3949,44 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
               const showCost = mode === 'stock' || (mode === 'sales' && !isConfidentMatch);
               const showSale = mode === 'sales' && !isConfidentMatch;
               return (
-                <div key={idx} style={{ padding: '5px 2px', borderTop: idx > 0 ? `1px solid ${C.line}33` : 'none' }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: '40px 1fr 90px', gap: 6, alignItems: 'center' }}>
+                <div key={idx} style={{ padding: '8px 4px', borderTop: idx > 0 ? `1px solid ${C.line}55` : 'none' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '48px 1fr 104px', gap: 8, alignItems: 'center' }}>
                     <input
                       type="number" min={1} value={row.quantity}
                       onChange={e => updateFlatRow(idx, 'quantity', Math.max(1, Number(e.target.value) || 1))}
-                      style={{ width: '100%', padding: '5px 4px', borderRadius: 5, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_MONO, fontSize: 13, textAlign: 'center' }}
+                      style={{ width: '100%', padding: '9px 4px', borderRadius: 7, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_MONO, fontSize: 15, fontWeight: 700, textAlign: 'center' }}
                     />
                     <input
                       value={row.description} placeholder="Item name"
                       onChange={e => updateFlatRow(idx, 'description', e.target.value)}
-                      style={{ width: '100%', padding: '5px 7px', borderRadius: 5, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_BODY, fontSize: 13.5 }}
+                      style={{ width: '100%', padding: '9px 10px', borderRadius: 7, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_BODY, fontSize: 16, fontWeight: 600 }}
                     />
                     <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                       <input
                         type="number" value={row.amount} placeholder="0"
                         onChange={e => updateFlatRow(idx, 'amount', e.target.value)}
-                        style={{ width: '100%', padding: '5px 6px', borderRadius: 5, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_MONO, fontSize: 13, textAlign: 'right' }}
+                        style={{ width: '100%', padding: '9px 8px', borderRadius: 7, border: `1px solid ${C.amber}55`, background: C.ink, color: C.amber, fontFamily: FONT_MONO, fontSize: 15, fontWeight: 700, textAlign: 'right' }}
                       />
-                      <button onClick={() => removeFlatRow(idx)} style={{ background: 'none', border: 'none', color: C.paperDim, cursor: 'pointer', padding: 2, flexShrink: 0 }}><X size={13} /></button>
+                      <button onClick={() => removeFlatRow(idx)} style={{ background: 'none', border: 'none', color: C.paperDim, cursor: 'pointer', padding: 2, flexShrink: 0 }}><X size={14} /></button>
                     </div>
                   </div>
                   {row.description.trim() && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4, paddingLeft: 46, flexWrap: 'wrap' }}>
-                      <span style={{ fontSize: 9.5, color: isConfidentMatch ? C.teal : C.paperDim }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6, paddingLeft: 56, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: 10.5, fontWeight: 600, color: isConfidentMatch ? C.teal : C.paperDim }}>
                         {isConfidentMatch ? `✓ matches ${qm.item.name}` : 'new item'}
                       </span>
                       {showCost && (
                         <input
                           type="number" value={row.costPrice || ''} placeholder="Cost price ₦"
                           onChange={e => updateFlatRow(idx, 'costPrice', e.target.value)}
-                          style={{ width: 96, padding: '3px 6px', borderRadius: 5, border: `1px solid ${C.line}55`, background: 'transparent', color: C.paperDim, fontFamily: FONT_MONO, fontSize: 10.5 }}
+                          style={{ width: 100, padding: '4px 7px', borderRadius: 6, border: `1px solid ${C.line}55`, background: 'transparent', color: C.paperDim, fontFamily: FONT_MONO, fontSize: 11 }}
                         />
                       )}
                       {showSale && (
                         <input
                           type="number" value={row.salePrice || ''} placeholder="Sale price ₦"
                           onChange={e => updateFlatRow(idx, 'salePrice', e.target.value)}
-                          style={{ width: 96, padding: '3px 6px', borderRadius: 5, border: `1px solid ${C.line}55`, background: 'transparent', color: C.paperDim, fontFamily: FONT_MONO, fontSize: 10.5 }}
+                          style={{ width: 100, padding: '4px 7px', borderRadius: 6, border: `1px solid ${C.line}55`, background: 'transparent', color: C.paperDim, fontFamily: FONT_MONO, fontSize: 11 }}
                         />
                       )}
                     </div>
@@ -4025,6 +4045,20 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
               <Clock size={13} color={C.amber} />
               <span style={{ fontSize: 13, fontWeight: 700, color: C.amber }}>Dated {ledgerDate}</span>
             </div>
+          )}
+
+          {photoPreview && (
+            // The source photo stays visible through review too, not just
+            // the flat page — so a line can be cross-checked against the
+            // actual page without backing all the way out to find it again.
+            // Collapsed by default to keep the (already dense) card list
+            // from being pushed too far down; tap to see it full-size.
+            <details style={{ marginBottom: 10 }}>
+              <summary style={{ fontSize: 11, color: C.paperDim, cursor: 'pointer', userSelect: 'none', listStyle: 'none', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <Camera size={12} /> Show the photo again
+              </summary>
+              <img src={photoPreview} alt="Ledger page" style={{ width: '100%', maxHeight: 280, objectFit: 'contain', borderRadius: 8, border: `1px solid ${C.line}`, background: C.ink, marginTop: 8 }} />
+            </details>
           )}
 
           {duplicateDayWarning && (
@@ -4242,9 +4276,26 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
 
       {done && (
         <div style={{ textAlign: 'center', padding: '40px 16px' }}>
-          <Check size={32} color={C.teal} style={{ marginBottom: 12 }} />
-          <div style={{ fontSize: 15, fontWeight: 600, color: C.paper, marginBottom: 6 }}>All done</div>
-          <div style={{ fontSize: 13, color: C.paperDim, marginBottom: 20 }}>Entries recorded successfully from your notebook.</div>
+          <div style={{
+            width: 56, height: 56, borderRadius: '50%', background: `${C.teal}1A`, border: `2px solid ${C.teal}`,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px',
+          }}>
+            <Check size={26} color={C.teal} strokeWidth={3} />
+          </div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: C.paper, marginBottom: 8 }}>Saved to your ledger</div>
+          {lastSaved ? (
+            <div style={{
+              display: 'inline-flex', flexDirection: 'column', gap: 2, padding: '10px 18px', borderRadius: 10,
+              background: `${C.teal}14`, border: `1px solid ${C.teal}55`, marginBottom: 20,
+            }}>
+              <span style={{ fontFamily: FONT_MONO, fontSize: 20, fontWeight: 700, color: C.teal }}>{naira(lastSaved.total)}</span>
+              <span style={{ fontSize: 11.5, color: C.paperDim }}>
+                {lastSaved.count} item{lastSaved.count !== 1 ? 's' : ''} {lastSaved.mode === 'stock' ? 'received' : 'recorded'} · dated {lastSaved.ledgerDate}
+              </span>
+            </div>
+          ) : (
+            <div style={{ fontSize: 13, color: C.paperDim, marginBottom: 20 }}>Entries recorded successfully from your notebook.</div>
+          )}
           <button onClick={() => setDone(false)} style={{ padding: '10px 24px', borderRadius: 8, border: 'none', background: C.amber, color: C.ink, fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>Add another page</button>
         </div>
       )}
