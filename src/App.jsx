@@ -3561,10 +3561,21 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
         const match = matchedItem ? { item: matchedItem, confidence: row.matchedItem.confidence, viaAlias: !!row.matchedItem.viaAlias } : null;
         const qty = row.quantity || 1;
         const estUnitAmount = row.amountOnPage ? Math.round(row.amountOnPage / qty) : '';
-        // Cost/sale price the trader may have already typed on the flat
-        // page for this exact line — carried forward so nothing has to be
-        // re-entered on the review screen.
+        // Cost price the trader may have already typed on the flat page for
+        // this exact line — carried forward so it isn't re-typed here.
+        // Sale price is gone from stage 1 entirely — the page's own amount
+        // already IS the sale price (amount ÷ qty), asking again was
+        // genuinely redundant.
         const flatSrc = cleanRows[i] || {};
+        // Auto-resolved the moment this screen loads — no tap required to
+        // make a row "ready": a confident match is accepted as-is, and
+        // anything else becomes a new item automatically. This matches how
+        // traders actually work (sourcing an item from a neighbor they
+        // don't normally stock is normal, not an error state needing a
+        // decision every time). The match is still kept around even when
+        // not used, so "not quite right?" can offer it as a one-tap fix
+        // instead of a blank search.
+        const autoConfident = !!match && !row.needsReview;
         return {
           rawLine: row.rawDescription,
           overrideQty: qty,
@@ -3583,13 +3594,14 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
           suggestedBatchNumber: row.suggestedBatchNumber || '',
           suggestedUnitCost: mode === 'stock' ? (flatSrc.costPrice || estUnitAmount) : '',
           match,
-          confirmed: !!match && !row.needsReview,
-          creating: false,
+          confirmed: autoConfident,
+          creating: !autoConfident,
+          editing: false, // the collapsed "not quite right?" panel — closed by default
           priceMismatch: row.priceMismatch || null,
           priceResolution: null,
           newDraft: {
             name: row.rawDescription, category: row.suggestedCategory || '',
-            price: mode === 'sales' ? (flatSrc.salePrice || estUnitAmount) : '',
+            price: mode === 'sales' ? estUnitAmount : '',
             cost: mode === 'stock' ? (flatSrc.costPrice || estUnitAmount) : (flatSrc.costPrice || ''),
             expiryDate: row.suggestedExpiryDate || '', batchNumber: row.suggestedBatchNumber || '',
           },
@@ -3611,21 +3623,14 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
     const item = inventory.find(i => i.id === itemId);
     setParsed(p => p.map((r, i) => i === idx ? { ...r, match: item ? { item, confidence: 1 } : null, confirmed: !!item, creating: false } : r));
   };
-  const toggleConfirm = (idx) => setParsed(p => p.map((r, i) => i === idx ? { ...r, confirmed: !r.confirmed } : r));
   const startCreating = (idx) => setParsed(p => p.map((r, i) => i === idx ? { ...r, creating: true, confirmed: false } : r));
   const cancelCreating = (idx) => setParsed(p => p.map((r, i) => i === idx ? { ...r, creating: false } : r));
   const updateNewDraft = (idx, key, val) => setParsed(p => p.map((r, i) => i === idx ? { ...r, newDraft: { ...r.newDraft, [key]: val } } : r));
-
-  // A row qualifies for the bulk "Quick-add all" action once it already has
-  // what it needs — name, quantity, and a price already guessed from the
-  // page — and just hasn't been individually flipped to "creating" yet.
-  // Deliberately scoped to unmatched rows only: a row that DID match an
-  // existing item still gets its own single-tap confirm, so a genuine
-  // mismatch doesn't get silently bulk-accepted alongside real new items.
-  const eligibleForQuickAdd = (r) => !r.match && !r.creating
-    && r.newDraft.name && r.newDraft.name.trim()
-    && (mode === 'stock' ? Number(r.newDraft.cost) > 0 : Number(r.newDraft.price) > 0);
-  const quickAddAllNew = () => setParsed(p => p.map(r => eligibleForQuickAdd(r) ? { ...r, creating: true, confirmed: false } : r));
+  // Toggles the collapsed "not quite right?" panel — every row is ready to
+  // save the moment this screen loads, so this is purely optional, never a
+  // gate on readiness.
+  const toggleEditing = (idx) => setParsed(p => p.map((r, i) => i === idx ? { ...r, editing: !r.editing } : r));
+  const removeRow = (idx) => setParsed(p => p.filter((_, i) => i !== idx));
 
   // Mode-aware: a new Stock Arrival item is ready once it has a cost (that's
   // what a delivery ledger actually records), a new Sale is ready once it
@@ -3657,21 +3662,6 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
 
   const pageTotal = (parsed || []).reduce((sum, r) => sum + displayTotal(r), 0);
   const readyTotal = (parsed || []).filter(isRowReady).reduce((sum, r) => sum + displayTotal(r), 0);
-
-  const resolvePriceMismatch = async (idx, action) => {
-    const row = parsed[idx];
-    if (!row || !row.priceMismatch) return;
-    if (action === 'keep') {
-      setParsed(p => p.map((r, i) => i === idx ? { ...r, priceResolution: 'keep' } : r));
-      return;
-    }
-    const newPrice = row.priceMismatch.extractedUnitPrice;
-    const updated = await onAddStock({ ...row.match.item, price: newPrice, isNew: false });
-    setParsed(p => p.map((r, i) => i === idx
-      ? { ...r, priceResolution: 'update', match: { ...r.match, item: updated || { ...r.match.item, price: newPrice } } }
-      : r
-    ));
-  };
 
   const duplicateDayWarning = useMemo(() => {
     if (!ledgerDate || !parsed || mode !== 'sales') return null;
@@ -3947,7 +3937,6 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
               // confident match in Sales mode (a matched item already has
               // a known cost — asking again is just noise).
               const showCost = mode === 'stock' || (mode === 'sales' && !isConfidentMatch);
-              const showSale = mode === 'sales' && !isConfidentMatch;
               return (
                 <div key={idx} style={{ padding: '8px 4px', borderTop: idx > 0 ? `1px solid ${C.line}55` : 'none' }}>
                   <div style={{ display: 'grid', gridTemplateColumns: '48px 1fr 104px', gap: 8, alignItems: 'center' }}>
@@ -3971,23 +3960,25 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
                     </div>
                   </div>
                   {row.description.trim() && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6, paddingLeft: 56, flexWrap: 'wrap' }}>
-                      <span style={{ fontSize: 10.5, fontWeight: 600, color: isConfidentMatch ? C.teal : C.paperDim }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 7, paddingLeft: 56, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: isConfidentMatch ? C.teal : C.paperDim }}>
                         {isConfidentMatch ? `✓ matches ${qm.item.name}` : 'new item'}
                       </span>
                       {showCost && (
                         <input
-                          type="number" value={row.costPrice || ''} placeholder="Cost price ₦"
+                          type="number" value={row.costPrice || ''} placeholder="Cost price ₦ (optional)"
                           onChange={e => updateFlatRow(idx, 'costPrice', e.target.value)}
-                          style={{ width: 100, padding: '4px 7px', borderRadius: 6, border: `1px solid ${C.line}55`, background: 'transparent', color: C.paperDim, fontFamily: FONT_MONO, fontSize: 11 }}
+                          style={{ width: 150, padding: '6px 9px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_MONO, fontSize: 12.5, fontWeight: 600 }}
                         />
                       )}
-                      {showSale && (
-                        <input
-                          type="number" value={row.salePrice || ''} placeholder="Sale price ₦"
-                          onChange={e => updateFlatRow(idx, 'salePrice', e.target.value)}
-                          style={{ width: 100, padding: '4px 7px', borderRadius: 6, border: `1px solid ${C.line}55`, background: 'transparent', color: C.paperDim, fontFamily: FONT_MONO, fontSize: 11 }}
-                        />
+                      {/* Inline, informational only — the amount above is
+                          already editable right here, so there's nothing
+                          further to confirm, just a heads-up if it's worth
+                          a second look. */}
+                      {isConfidentMatch && Number(row.amount) > 0 && Number(qm.item.price) > 0 && Math.abs((Number(row.amount) / (Number(row.quantity) || 1)) - Number(qm.item.price)) / Number(qm.item.price) > 0.1 && (
+                        <span style={{ fontSize: 10, color: C.amber }}>
+                          your records show {naira(qm.item.price)}/unit
+                        </span>
                       )}
                     </div>
                   )}
@@ -4079,152 +4070,120 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
               <span style={{ fontSize: 12, color: C.paperDim, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{mode === 'stock' ? 'Total Cost' : 'Total Sales'}</span>
               <span style={{ fontFamily: FONT_MONO, fontSize: 22, fontWeight: 700, color: C.teal }}>{naira(pageTotal)}</span>
             </div>
-            {(() => {
-              const quickAddCount = parsed.filter(eligibleForQuickAdd).length;
-              return quickAddCount > 1 ? (
-                <button
-                  onClick={quickAddAllNew}
-                  style={{ width: '100%', marginTop: 8, padding: '10px 0', borderRadius: 8, border: `1px dashed ${C.amber}88`, background: `${C.amber}14`, color: C.amber, fontWeight: 700, fontSize: 12.5, cursor: 'pointer' }}
-                >
-                  + Quick-add all {quickAddCount} new items (name, qty & price already confirmed)
-                </button>
-              ) : null;
-            })()}
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
             {parsed.map((row, idx) => {
-              const borderColor = row.creating ? C.amber + '55' : (row.match && row.confirmed) ? C.teal + '55' : !row.match ? C.red + '55' : C.line;
+              // Every row is auto-resolved and ready the moment this screen
+              // loads — no tap required. "Not quite right?" is the only way
+              // in, kept deliberately out of the way since most rows won't
+              // need it.
+              const borderColor = row.creating ? C.amber + '55' : C.teal + '55';
               const lineTotal = displayTotal(row);
-              const { amount: unitPrice, isConfirmedPrice } = rowUnitPrice(row);
+              const { amount: unitPrice } = rowUnitPrice(row);
+              const displayName = row.creating ? (row.newDraft.name || 'New item') : (row.match ? row.match.item.name : row.rawLine);
               return (
-                <div key={idx} style={{ background: C.panel, border: `1px solid ${borderColor}`, borderRadius: 10, padding: '12px 14px' }}>
-                  <div style={{ fontSize: 14, fontWeight: 700, color: C.paper, marginBottom: 1 }}>
-                    {row.creating ? (row.newDraft.name || 'New item') : row.match ? row.match.item.name : row.rawLine}
+                <div key={idx} style={{ background: C.panel, border: `1px solid ${borderColor}`, borderRadius: 10, padding: '14px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 16, fontWeight: 700, color: C.paper }}>{displayName}</div>
+                      <div style={{ fontSize: 10, color: C.paperDim, fontFamily: FONT_MONO, marginTop: 2 }}>
+                        from: "{row.rawLine}"
+                        {row.creating && <span style={{ color: C.amber }}> · new item</span>}
+                        {!row.creating && row.match?.viaAlias && <span style={{ color: C.teal }}> · remembered from a previous scan</span>}
+                      </div>
+                    </div>
+                    <button onClick={() => removeRow(idx)} style={{ background: 'none', border: 'none', color: C.paperDim, cursor: 'pointer', padding: 2, flexShrink: 0 }} aria-label="Remove this line"><X size={15} /></button>
                   </div>
-                  <div style={{ fontSize: 10, color: C.paperDim, fontFamily: FONT_MONO, marginBottom: 8 }}>
-                    from: "{row.rawLine}"
-                    {row.match && row.match.viaAlias && <span style={{ color: C.teal }}> · remembered from a previous scan</span>}
+
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 10, paddingTop: 10, borderTop: `1px solid ${C.line}` }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <input
+                        type="number" value={row.overrideQty} min={1} onChange={e => updateQty(idx, e.target.value)}
+                        style={{ width: 48, textAlign: 'center', padding: '6px 4px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_MONO, fontSize: 14, fontWeight: 700 }}
+                      />
+                      <span style={{ fontSize: 12, color: C.paperDim }}>× {naira(unitPrice)}</span>
+                    </div>
+                    <span style={{ fontFamily: FONT_MONO, fontSize: 19, fontWeight: 700, color: C.teal }}>{naira(lineTotal)}</span>
                   </div>
 
-                  {!row.creating && unitPrice > 0 && (
-                    <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 8, paddingBottom: 8, borderBottom: `1px solid ${C.line}` }}>
-                      <span style={{ fontSize: 12, color: C.paperDim }}>
-                        {row.overrideQty} × {naira(unitPrice)}
-                        {!isConfirmedPrice && <span style={{ color: C.amber, fontStyle: 'italic' }}> (from photo, unconfirmed)</span>}
-                      </span>
-                      <span style={{ fontFamily: FONT_MONO, fontSize: 18, fontWeight: 700, color: isConfirmedPrice ? C.teal : C.amber }}>{naira(lineTotal)}</span>
+                  {row.priceMismatch && (
+                    // Informational only now — editing happens upstream on
+                    // the flat page itself, so this is just an FYI, not a
+                    // decision the owner has to make here.
+                    <div style={{ fontSize: 10.5, color: C.amber, marginTop: 8 }}>
+                      Page reads {naira(row.priceMismatch.extractedUnitPrice)}/unit — your records show {naira(row.priceMismatch.recordedPrice)}
                     </div>
                   )}
 
-                  {row.priceMismatch && !row.priceResolution && (
-                    <div style={{ background: `${C.amber}14`, border: `1px solid ${C.amber}55`, borderRadius: 8, padding: '10px 12px', marginBottom: 8 }}>
-                      <div style={{ fontSize: 12, color: C.paper, marginBottom: 8 }}>
-                        This line reads <b style={{ color: C.amber }}>{naira(row.priceMismatch.extractedUnitPrice)}</b>, but your records show <b>{naira(row.priceMismatch.recordedPrice)}</b>.
-                      </div>
-                      <div style={{ display: 'flex', gap: 8 }}>
-                        <button onClick={() => resolvePriceMismatch(idx, 'keep')} style={{ flex: 1, padding: '7px 0', borderRadius: 6, border: `1px solid ${C.line}`, background: 'transparent', color: C.paperDim, fontWeight: 700, fontSize: 11, cursor: 'pointer' }}>Keep recorded price</button>
-                        <button onClick={() => resolvePriceMismatch(idx, 'update')} style={{ flex: 1, padding: '7px 0', borderRadius: 6, border: 'none', background: C.amber, color: C.ink, fontWeight: 700, fontSize: 11, cursor: 'pointer' }}>Update to {naira(row.priceMismatch.extractedUnitPrice)}</button>
-                      </div>
+                  {mode === 'stock' && (
+                    // Expiry/batch live here, always visible, not tucked
+                    // behind an extra tap — this screen is specifically
+                    // where that kind of detail belongs now.
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 10 }}>
+                      <input
+                        type="date"
+                        value={row.creating ? row.newDraft.expiryDate : row.suggestedExpiryDate}
+                        onChange={e => row.creating ? updateNewDraft(idx, 'expiryDate', e.target.value) : setParsed(p => p.map((r, i) => i === idx ? { ...r, suggestedExpiryDate: e.target.value } : r))}
+                        style={{ padding: '7px 8px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: (row.creating ? row.newDraft.expiryDate : row.suggestedExpiryDate) ? C.paper : C.paperDim, fontFamily: FONT_BODY, fontSize: 12 }}
+                      />
+                      <input
+                        value={row.creating ? row.newDraft.batchNumber : row.suggestedBatchNumber}
+                        placeholder="Batch/lot (optional)"
+                        onChange={e => row.creating ? updateNewDraft(idx, 'batchNumber', e.target.value) : setParsed(p => p.map((r, i) => i === idx ? { ...r, suggestedBatchNumber: e.target.value } : r))}
+                        style={{ padding: '7px 8px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_BODY, fontSize: 12 }}
+                      />
                     </div>
-                  )}
-                  {row.priceMismatch && row.priceResolution === 'update' && (
-                    <div style={{ fontSize: 10, color: C.teal, marginBottom: 8 }}>✓ Price updated to {naira(row.priceMismatch.extractedUnitPrice)}</div>
                   )}
 
-                  {row.creating ? (
-                    <div>
-                      <div style={{ fontSize: 11, color: C.amber, fontWeight: 700, marginBottom: 8 }}>+ New item</div>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
-                        <input
-                          value={row.newDraft.name} onChange={e => updateNewDraft(idx, 'name', e.target.value)}
-                          placeholder="Item name" style={{ gridColumn: '1 / -1', padding: '7px 9px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_BODY, fontSize: 13 }}
-                        />
-                        <input
-                          value={row.newDraft.category} onChange={e => updateNewDraft(idx, 'category', e.target.value)}
-                          list="notebook-category-suggestions" placeholder="Category (optional)"
-                          style={{ padding: '7px 9px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_BODY, fontSize: 13 }}
-                        />
-                        <input
-                          type="number" value={row.newDraft.cost} onChange={e => updateNewDraft(idx, 'cost', e.target.value)}
-                          placeholder="Cost price (₦, optional)" style={{ padding: '7px 9px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_MONO, fontSize: 13 }}
-                        />
-                        <input
-                          type="number" value={row.newDraft.price} onChange={e => updateNewDraft(idx, 'price', e.target.value)}
-                          placeholder="Sale price (₦)" style={{ padding: '7px 9px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_MONO, fontSize: 13 }}
-                        />
-                        <input
-                          type="date" value={row.newDraft.expiryDate} onChange={e => updateNewDraft(idx, 'expiryDate', e.target.value)}
-                          style={{ padding: '7px 9px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: row.newDraft.expiryDate ? C.paper : C.paperDim, fontFamily: FONT_BODY, fontSize: 12 }}
-                        />
-                        <input
-                          value={row.newDraft.batchNumber} onChange={e => updateNewDraft(idx, 'batchNumber', e.target.value)}
-                          placeholder="Batch/lot (optional)" style={{ padding: '7px 9px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_BODY, fontSize: 13 }}
-                        />
-                      </div>
-                      {lineTotal > 0 && (
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, fontSize: 12 }}>
-                          <span style={{ color: C.paperDim }}>Line total</span>
-                          <span style={{ fontFamily: FONT_MONO, fontWeight: 700, color: C.teal }}>{naira(lineTotal)}</span>
-                        </div>
-                      )}
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <span style={{ fontSize: 11, color: C.paperDim }}>{mode === 'sales' ? 'Qty sold:' : 'Initial stock:'}</span>
-                        <input type="number" value={row.overrideQty} min={1} onChange={e => updateQty(idx, e.target.value)} style={{ width: 52, textAlign: 'center', padding: '5px 6px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_MONO, fontSize: 14, fontWeight: 700 }} />
-                        <button onClick={() => cancelCreating(idx)} style={{ marginLeft: 'auto', padding: '5px 10px', borderRadius: 6, border: `1px solid ${C.line}`, background: 'transparent', color: C.paperDim, fontWeight: 600, fontSize: 11, cursor: 'pointer' }}>Cancel</button>
-                      </div>
-                    </div>
-                  ) : (
-                    <>
-                      {row.match ? (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ fontSize: 11, color: C.paperDim }}>{row.match.item.brand} · {Math.round(row.match.confidence * 100)}% match</div>
-                            {mode === 'stock' && row.suggestedExpiryDate && !row.match.item.expiryDate && (
-                              <div style={{ fontSize: 10, color: C.teal, marginTop: 3 }}>Will set expiry: {row.suggestedExpiryDate} (this item has none yet)</div>
-                            )}
-                            {mode === 'stock' && row.suggestedUnitCost && Number(row.suggestedUnitCost) !== Number(row.match.item.cost) && (
+                  <button onClick={() => toggleEditing(idx)} style={{ marginTop: 10, background: 'none', border: 'none', color: C.paperDim, fontSize: 11, textDecoration: 'underline', cursor: 'pointer', padding: 0 }}>
+                    {row.editing ? 'Hide details' : 'Not quite right?'}
+                  </button>
+
+                  {row.editing && (
+                    <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${C.line}` }}>
+                      {row.creating ? (
+                        <>
+                          <input
+                            value={row.newDraft.name} onChange={e => updateNewDraft(idx, 'name', e.target.value)}
+                            placeholder="Item name" style={{ width: '100%', padding: '7px 9px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_BODY, fontSize: 13, marginBottom: 8 }}
+                          />
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
+                            <input
+                              value={row.newDraft.category} onChange={e => updateNewDraft(idx, 'category', e.target.value)}
+                              list="notebook-category-suggestions" placeholder="Category (optional)"
+                              style={{ padding: '7px 9px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_BODY, fontSize: 13 }}
+                            />
+                            <input
+                              type="number" value={row.newDraft.cost} onChange={e => updateNewDraft(idx, 'cost', e.target.value)}
+                              placeholder="Cost price (₦, optional)" style={{ padding: '7px 9px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_MONO, fontSize: 13 }}
+                            />
+                          </div>
+                          {inventory.length > 0 && (
+                            <select onChange={e => updateMatch(idx, e.target.value)} value="" style={{ width: '100%', padding: '6px 8px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontSize: 12 }}>
+                              <option value="">Match to an existing item instead…</option>
+                              {inventory.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
+                            </select>
+                          )}
+                        </>
+                      ) : (
+                        <>
+                          <div style={{ fontSize: 11, color: C.paperDim, marginBottom: 8 }}>
+                            {row.match?.item.brand} · {Math.round((row.match?.confidence || 0) * 100)}% match
+                            {mode === 'stock' && row.suggestedUnitCost && Number(row.suggestedUnitCost) !== Number(row.match?.item.cost) && (
                               <div style={{ fontSize: 10, color: C.teal, marginTop: 3 }}>Cost will update to a weighted average (was {naira(row.match.item.cost)}, this delivery ≈{naira(row.suggestedUnitCost)}/unit)</div>
                             )}
                           </div>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <input type="number" value={row.overrideQty} min={1} onChange={e => updateQty(idx, e.target.value)} style={{ width: 52, textAlign: 'center', padding: '5px 6px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_MONO, fontSize: 14, fontWeight: 700 }} />
-                            <button onClick={() => toggleConfirm(idx)} style={{ padding: '5px 10px', borderRadius: 6, border: 'none', background: row.confirmed ? C.teal : C.line, color: row.confirmed ? '#fff' : C.paperDim, fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>{row.confirmed ? '✓' : 'Skip'}</button>
-                          </div>
-                        </div>
-                      ) : (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                          <AlertTriangle size={13} color={C.red} />
-                          <span style={{ fontSize: 12, color: C.red }}>Not in your inventory yet</span>
-                        </div>
-                      )}
-
-                      {inventory.length > 0 && (
-                        <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${C.line}`, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                          {row.match ? (
-                            <select onChange={e => updateMatch(idx, e.target.value)} value={row.match.item.id} style={{ background: 'none', border: 'none', color: C.paperDim, textDecoration: 'underline', fontSize: 11, cursor: 'pointer', padding: 0 }}>
-                              <option value={row.match.item.id}>Not this? change match</option>
-                              {inventory.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
-                            </select>
-                          ) : (
-                            <select onChange={e => updateMatch(idx, e.target.value)} value="" style={{ flex: 1, minWidth: 140, padding: '5px 8px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontSize: 12 }}>
-                              <option value="">— pick an existing item —</option>
+                          {inventory.length > 0 && (
+                            <select onChange={e => updateMatch(idx, e.target.value)} value={row.match?.item.id || ''} style={{ width: '100%', padding: '6px 8px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontSize: 12, marginBottom: 8 }}>
+                              <option value="">— pick a different item —</option>
                               {inventory.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
                             </select>
                           )}
-                          <button onClick={() => startCreating(idx)} style={{ padding: '5px 10px', borderRadius: 6, border: `1px dashed ${C.amber}66`, background: `${C.amber}14`, color: C.amber, fontWeight: 700, fontSize: 11, cursor: 'pointer', whiteSpace: 'nowrap' }}>+ Create as new item</button>
-                        </div>
+                          <button onClick={() => startCreating(idx)} style={{ padding: '6px 10px', borderRadius: 6, border: `1px dashed ${C.amber}66`, background: `${C.amber}14`, color: C.amber, fontWeight: 700, fontSize: 11, cursor: 'pointer' }}>Treat as new item instead</button>
+                        </>
                       )}
-                      {!row.match && (
-                        <div style={{ marginTop: inventory.length > 0 ? 6 : 8 }}>
-                          {inventory.length === 0 ? (
-                            <button onClick={() => startCreating(idx)} style={{ padding: '6px 12px', borderRadius: 6, border: `1px dashed ${C.amber}66`, background: `${C.amber}14`, color: C.amber, fontWeight: 700, fontSize: 11, cursor: 'pointer' }}>+ Add price & save as new item</button>
-                          ) : mode === 'sales' && (
-                            <div style={{ fontSize: 10, color: C.paperDim, fontStyle: 'italic' }}>Sell it anyway, or create it from this line.</div>
-                          )}
-                        </div>
-                      )}
-                    </>
+                    </div>
                   )}
                 </div>
               );
