@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   Fuel, Droplet, Package, TrendingUp, TrendingDown, AlertTriangle,
   RefreshCw, MessageCircle, Lock, Clock, ChevronRight, Plus, Minus,
@@ -984,7 +984,10 @@ function TickerBar({ fmtTime, rates, rateLoading, rateError, onRefresh }) {
 
   return (
     <div style={{
-      position: 'relative',
+      // Pinned to the top of the viewport — stays visible and keeps
+      // scrolling through its own content while the user scrolls the rest
+      // of the page, rather than scrolling away with everything else.
+      position: 'sticky', top: 0, zIndex: 50,
       background: '#0E0F12',
       backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='40'%3E%3Cpath d='M0 20 Q25 8 50 20 Q75 32 100 20 Q125 8 150 20 Q175 32 200 20' fill='none' stroke='rgba(242,169,59,0.06)' stroke-width='1'/%3E%3Cpath d='M0 28 Q25 16 50 28 Q75 40 100 28 Q125 16 150 28 Q175 40 200 28' fill='none' stroke='rgba(242,169,59,0.04)' stroke-width='1'/%3E%3Cpath d='M0 12 Q25 0 50 12 Q75 24 100 12 Q125 0 150 12 Q175 24 200 12' fill='none' stroke='rgba(242,169,59,0.03)' stroke-width='1'/%3E%3C/svg%3E")`,
       backgroundSize: '200px 40px',
@@ -3332,6 +3335,54 @@ function compressImageForUpload(file, { maxDimension = 2200, quality = 0.85 } = 
   });
 }
 
+// A single line of text that only scrolls (same marquee mechanism as the
+// ticker) when it's actually too long to fit — measured against its own
+// container, so a short name just sits still like normal text and nothing
+// animates unless it genuinely needs to.
+function ScrollingText({ text, style }) {
+  const containerRef = useRef(null);
+  const [overflowing, setOverflowing] = useState(false);
+  useEffect(() => {
+    const el = containerRef.current;
+    if (el) setOverflowing(el.scrollWidth > el.clientWidth + 2);
+  }, [text]);
+  return (
+    <div ref={containerRef} style={{ overflow: 'hidden', whiteSpace: 'nowrap', ...style }}>
+      {overflowing ? (
+        <div className="ticker-track" style={{ display: 'inline-flex', width: 'max-content' }}>
+          <span style={{ paddingRight: 28 }}>{text}</span>
+          <span aria-hidden="true">{text}</span>
+        </div>
+      ) : (
+        <span>{text}</span>
+      )}
+    </div>
+  );
+}
+
+// Shows DD/MM/YYYY (Nigerian order) regardless of device locale — a native
+// <input type="date"> displays in whatever order the PHONE's region is set
+// to, which isn't something a website can override directly, so this
+// overlays our own formatted text on top of an invisible native input: the
+// real date picker (calendar popup, typing, everything) still works exactly
+// as before, only the displayed text is now always DD/MM/YYYY.
+function DateFieldNG({ value, onChange, style, displayStyle }) {
+  const formatted = useMemo(() => {
+    if (!value) return 'Select date';
+    const [y, m, d] = value.split('-');
+    return (y && m && d) ? `${d}/${m}/${y}` : value;
+  }, [value]);
+  return (
+    <div style={{ position: 'relative', display: 'inline-block', ...style }}>
+      <input
+        type="date" value={value || ''} onChange={e => onChange(e.target.value)}
+        style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer', border: 'none', padding: 0 }}
+      />
+      <div style={{ pointerEvents: 'none', whiteSpace: 'nowrap', ...displayStyle }}>{formatted}</div>
+    </div>
+  );
+}
+
 function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSales, onAddStock, onReceiveStock, onRefresh }) {
   // Matches the app's existing SyncBar pattern — silent when fine, visible
   // only when there's an actual problem — rather than a permanent "online"
@@ -3912,9 +3963,10 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
             <Clock size={13} color={C.amber} />
             <span style={{ fontSize: 11, color: C.paperDim }}>Dated:</span>
-            <input
-              type="date" value={ledgerDate || ''} onChange={e => setLedgerDate(e.target.value)}
-              style={{ padding: '5px 8px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.panel, color: C.amber, fontFamily: FONT_MONO, fontSize: 12, fontWeight: 700 }}
+            <DateFieldNG
+              value={ledgerDate} onChange={setLedgerDate}
+              style={{ borderRadius: 6, border: `1px solid ${C.line}`, background: C.panel }}
+              displayStyle={{ padding: '5px 8px', color: C.amber, fontFamily: FONT_MONO, fontSize: 12, fontWeight: 700 }}
             />
             <span style={{ fontSize: 10, color: C.paperDim, fontStyle: 'italic' }}>— change this if you're catching up on an older page</span>
           </div>
@@ -4034,7 +4086,7 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
           {ledgerDate && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
               <Clock size={13} color={C.amber} />
-              <span style={{ fontSize: 13, fontWeight: 700, color: C.amber }}>Dated {ledgerDate}</span>
+              <span style={{ fontSize: 13, fontWeight: 700, color: C.amber }}>Dated {(() => { const [y, m, d] = (ledgerDate || '').split('-'); return (y && m && d) ? `${d}/${m}/${y}` : ledgerDate; })()}</span>
             </div>
           )}
 
@@ -4086,7 +4138,7 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
                 <div key={idx} style={{ background: C.panel, border: `1px solid ${borderColor}`, borderRadius: 10, padding: '14px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 16, fontWeight: 700, color: C.paper }}>{displayName}</div>
+                      <ScrollingText text={displayName} style={{ fontSize: 16, fontWeight: 700, color: C.paper }} />
                       <div style={{ fontSize: 10, color: C.paperDim, fontFamily: FONT_MONO, marginTop: 2 }}>
                         from: "{row.rawLine}"
                         {row.creating && <span style={{ color: C.amber }}> · new item</span>}
@@ -4121,11 +4173,11 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
                     // behind an extra tap — this screen is specifically
                     // where that kind of detail belongs now.
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 10 }}>
-                      <input
-                        type="date"
+                      <DateFieldNG
                         value={row.creating ? row.newDraft.expiryDate : row.suggestedExpiryDate}
-                        onChange={e => row.creating ? updateNewDraft(idx, 'expiryDate', e.target.value) : setParsed(p => p.map((r, i) => i === idx ? { ...r, suggestedExpiryDate: e.target.value } : r))}
-                        style={{ padding: '7px 8px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: (row.creating ? row.newDraft.expiryDate : row.suggestedExpiryDate) ? C.paper : C.paperDim, fontFamily: FONT_BODY, fontSize: 12 }}
+                        onChange={val => row.creating ? updateNewDraft(idx, 'expiryDate', val) : setParsed(p => p.map((r, i) => i === idx ? { ...r, suggestedExpiryDate: val } : r))}
+                        style={{ borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, width: '100%' }}
+                        displayStyle={{ padding: '7px 8px', color: (row.creating ? row.newDraft.expiryDate : row.suggestedExpiryDate) ? C.paper : C.paperDim, fontFamily: FONT_BODY, fontSize: 12 }}
                       />
                       <input
                         value={row.creating ? row.newDraft.batchNumber : row.suggestedBatchNumber}
