@@ -4,7 +4,7 @@ import {
   RefreshCw, MessageCircle, Lock, Clock, ChevronRight, Plus, Minus,
   ShoppingCart, BarChart3, Wallet, Boxes, Wrench, Link2, Check, Sparkles, ArrowUp, ArrowDown, Timer, ArchiveX, Award,
   Wifi, WifiOff, LogOut, Server, CloudUpload, AlertCircle, Users, ClipboardList, Camera, Type, Printer,
-  Image as ImageIcon, X
+  Image as ImageIcon, X, Mic
 } from 'lucide-react';
 // New dependency — run: npm install @simplewebauthn/browser
 import { startRegistration, startAuthentication, browserSupportsWebAuthn } from '@simplewebauthn/browser';
@@ -3428,6 +3428,85 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
   // already-selected photo, instead of sending the trader back to the
   // gallery/camera to re-pick it.
   const [extractionFailed, setExtractionFailed] = useState(false);
+
+  // VOICE — line-by-line entry. Speak one item, it lands as a row, speak
+  // the next. The mic lives on the flat page itself (below) so it's
+  // available no matter how the page was started — photo, pasted text, or
+  // voice from the very first line.
+  const [recording, setRecording] = useState(false);
+  const [voiceBusy, setVoiceBusy] = useState(false);
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
+
+  const blobToBase64 = (blob) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result.split(',')[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+
+  const sendVoiceLine = async (blob) => {
+    setVoiceBusy(true);
+    setError('');
+    try {
+      const base64 = await blobToBase64(blob);
+      const data = await apiRequest(apiUrl, '/ocr/transcribe-audio', {
+        method: 'POST', token, body: { audioBase64: base64, mimeType: blob.type, mode },
+      });
+      if (data.row && data.row.description) {
+        setFlatRows(rows => [...(rows || []), {
+          description: data.row.description,
+          quantity: data.row.quantity || 1,
+          amount: data.row.amount != null ? data.row.amount : '',
+        }]);
+      } else {
+        setError(data.error || "Didn't catch that — tap the mic and try again");
+      }
+    } catch (e) {
+      setError(e.message || 'Could not process that recording — try again');
+    } finally {
+      setVoiceBusy(false);
+    }
+  };
+
+  const startRecording = async () => {
+    setError('');
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = ['audio/webm', 'audio/mp4', 'audio/ogg'].find(t => typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(t)) || '';
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      audioChunksRef.current = [];
+      recorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
+      recorder.onstop = async () => {
+        stream.getTracks().forEach(t => t.stop());
+        const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
+        if (blob.size > 0) await sendVoiceLine(blob);
+      };
+      recorder.start();
+      mediaRecorderRef.current = recorder;
+      setRecording(true);
+    } catch (err) {
+      // Most commonly a denied microphone permission, or a browser (older
+      // iOS Safari) without MediaRecorder support at all.
+      setError('Could not access the microphone — check your browser permission for this site');
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && recording) {
+      mediaRecorderRef.current.stop();
+      setRecording(false);
+    }
+  };
+
+  // Voice doesn't "read" anything upfront the way photo/text do — it jumps
+  // straight to the flat page, empty, ready for the first spoken line.
+  const startVoiceEntry = () => {
+    setFlatRows([]);
+    setLedgerDate(d => d || new Date().toISOString().slice(0, 10));
+    setClientScanId(id => id || crypto.randomUUID());
+    setError('');
+  };
   // Generated once when stage 1 opens and reused for every retry of the
   // SAME scan (parse-page and, especially, commit) — this is what makes a
   // retried commit after a lost response on bad market network idempotent
@@ -3856,9 +3935,24 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
           <div style={{ display: 'flex', background: C.panel, borderRadius: 8, border: `1px solid ${C.line}`, padding: 3, marginBottom: 14 }}>
             {inputToggleBtn('text', 'Paste text', Type)}
             {inputToggleBtn('photo', 'Upload photo', Camera)}
+            {inputToggleBtn('voice', 'Speak', Mic)}
           </div>
 
-          {inputMode === 'text' ? (
+          {inputMode === 'voice' ? (
+            <div style={{ textAlign: 'center', padding: '30px 16px', border: `1px dashed ${C.line}`, borderRadius: 8, background: C.panel }}>
+              <Mic size={28} style={{ opacity: 0.6, marginBottom: 10 }} />
+              <div style={{ fontSize: 13, color: C.paper, marginBottom: 4, fontWeight: 600 }}>Speak your entries one at a time</div>
+              <div style={{ fontSize: 11.5, color: C.paperDim, marginBottom: 18, lineHeight: 1.5 }}>
+                Say the item, quantity and price — e.g. "one love spray, ten thousand naira". It lands as a line, then speak the next one.
+              </div>
+              <button
+                onClick={startVoiceEntry}
+                style={{ padding: '12px 28px', borderRadius: 8, border: 'none', background: C.amber, color: C.ink, fontWeight: 700, fontSize: 14, cursor: 'pointer' }}
+              >
+                Start speaking
+              </button>
+            </div>
+          ) : inputMode === 'text' ? (
             <textarea
               value={raw}
               onChange={e => setRaw(e.target.value)}
@@ -3915,19 +4009,21 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
 
           {error && <div style={{ color: C.red, fontSize: 12, marginTop: 10 }}>{error}</div>}
 
-          <button
-            onClick={handleTranscribe}
-            disabled={transcribing || compressing || (inputMode === 'text' ? !raw.trim() : !compressedInfo)}
-            style={{
-              width: '100%', marginTop: 12, padding: '12px 0', borderRadius: 8, border: 'none',
-              background: transcribing ? C.line : ((inputMode === 'text' ? raw.trim() : compressedInfo) ? C.amber : C.line),
-              color: (inputMode === 'text' ? raw.trim() : compressedInfo) ? C.ink : C.paperDim,
-              fontFamily: FONT_BODY, fontWeight: 700, fontSize: 14,
-              cursor: (inputMode === 'text' ? raw.trim() : compressedInfo) ? 'pointer' : 'default',
-            }}
-          >
-            {transcribing ? TRANSCRIBING_MESSAGES[transcribingMsgIdx] : compressing ? 'Preparing photo…' : 'Read entries'}
-          </button>
+          {inputMode !== 'voice' && (
+            <button
+              onClick={handleTranscribe}
+              disabled={transcribing || compressing || (inputMode === 'text' ? !raw.trim() : !compressedInfo)}
+              style={{
+                width: '100%', marginTop: 12, padding: '12px 0', borderRadius: 8, border: 'none',
+                background: transcribing ? C.line : ((inputMode === 'text' ? raw.trim() : compressedInfo) ? C.amber : C.line),
+                color: (inputMode === 'text' ? raw.trim() : compressedInfo) ? C.ink : C.paperDim,
+                fontFamily: FONT_BODY, fontWeight: 700, fontSize: 14,
+                cursor: (inputMode === 'text' ? raw.trim() : compressedInfo) ? 'pointer' : 'default',
+              }}
+            >
+              {transcribing ? TRANSCRIBING_MESSAGES[transcribingMsgIdx] : compressing ? 'Preparing photo…' : 'Read entries'}
+            </button>
+          )}
         </>
       )}
 
@@ -4037,7 +4133,25 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
                 </div>
               );
             })}
-            <button onClick={addFlatRow} style={{ width: '100%', marginTop: 6, padding: '6px 0', borderRadius: 6, border: `1px dashed ${C.line}`, background: 'transparent', color: C.paperDim, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>+ Add line</button>
+            <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+              <button onClick={addFlatRow} style={{ flex: 1, padding: '6px 0', borderRadius: 6, border: `1px dashed ${C.line}`, background: 'transparent', color: C.paperDim, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>+ Add line</button>
+              {/* Available regardless of how this page was started — a
+                  photo-scanned or pasted-text page can still pick up one
+                  more spoken item. */}
+              <button
+                onClick={recording ? stopRecording : startRecording}
+                disabled={voiceBusy}
+                style={{
+                  flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                  padding: '6px 0', borderRadius: 6, border: `1px solid ${recording ? C.red : C.line}`,
+                  background: recording ? `${C.red}22` : 'transparent', color: recording ? C.red : C.paperDim,
+                  fontSize: 11, fontWeight: 700, cursor: voiceBusy ? 'default' : 'pointer',
+                }}
+              >
+                <Mic size={12} />
+                {voiceBusy ? 'Listening to that…' : recording ? 'Tap to stop' : '+ Add by voice'}
+              </button>
+            </div>
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', borderRadius: 8, background: `${C.teal}14`, border: `1px solid ${C.teal}55`, marginBottom: 12 }}>
