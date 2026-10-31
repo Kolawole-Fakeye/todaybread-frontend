@@ -2362,9 +2362,19 @@ function ReportsView({ sales, inventory, onVoid, apiUrl, token, onGoToSale }) {
             </>
           ) : (
             <>
+              {/* Was inventory.length ("products logged") — a LIFETIME
+                  catalog count with no date filter at all, sitting right
+                  next to "cash in today" under a "Today at a glance"
+                  header. It could jump on any day a new product got
+                  created, with zero relationship to today, which is
+                  exactly the "appears out of nowhere" mismatch — 44
+                  products total, ₦0 sold today, both true at once but
+                  reading like a contradiction. Replaced with an actually
+                  today-scoped count, consistent with cash in today by
+                  construction: zero sales today always means zero here. */}
               <div>
-                <div style={{ fontFamily: FONT_MONO, fontSize: 22, fontWeight: 700 }}>{inventory.length.toLocaleString()}</div>
-                <div style={{ fontSize: 11, color: C.paperDim, marginTop: 2 }}>products logged</div>
+                <div style={{ fontFamily: FONT_MONO, fontSize: 22, fontWeight: 700, color: todaySales.length > 0 ? C.teal : C.paperDim }}>{todaySales.length.toLocaleString()}</div>
+                <div style={{ fontSize: 11, color: C.paperDim, marginTop: 2 }}>items sold today</div>
               </div>
               <div style={{ width: 1, background: C.line }} />
               <div>
@@ -2377,7 +2387,10 @@ function ReportsView({ sales, inventory, onVoid, apiUrl, token, onGoToSale }) {
         <div style={{ fontSize: 11, color: C.paperDim, marginTop: 10, paddingTop: 10, borderTop: `1px solid ${C.line}` }}>
           {hasTrackedInventory
             ? `${naira(stockValueAtCost)} worth of stock currently sitting in the shop, at cost`
-            : `${totalSalesAllTime.toLocaleString()} sale${totalSalesAllTime === 1 ? '' : 's'} logged since you started`}
+            // The lifetime product count now lives here, explicitly framed
+            // as lifetime — same honest "since you started" treatment
+            // totalSalesAllTime already had, not implied to be about today.
+            : `${inventory.length.toLocaleString()} product${inventory.length === 1 ? '' : 's'} catalogued, ${totalSalesAllTime.toLocaleString()} sale${totalSalesAllTime === 1 ? '' : 's'} logged since you started`}
         </div>
       </div>
 
@@ -3335,6 +3348,27 @@ function compressImageForUpload(file, { maxDimension = 2200, quality = 0.85 } = 
   });
 }
 
+// A text field that grows to show its whole value instead of clipping it.
+// A plain <input> has a fixed visible width and silently hides whatever
+// doesn't fit (no ellipsis, cut wherever the pixels run out, even mid-word) —
+// which looked exactly like the extraction was truncating item names
+// ("GOAT MEAT LIGHT SOUP" showing as "GOAT MEAT"). Nothing was being cut off
+// in the data; this just makes the whole name visible, wrapping to extra lines.
+function WrappingInput({ value, onChange, placeholder, style }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; }
+  }, [value]);
+  return (
+    <textarea
+      ref={ref} rows={1} value={value} placeholder={placeholder}
+      onChange={e => onChange(e.target.value.replace(/\n/g, ' '))}
+      style={{ resize: 'none', overflow: 'hidden', display: 'block', lineHeight: 1.25, ...style }}
+    />
+  );
+}
+
 // A single line of text that only scrolls (same marquee mechanism as the
 // ticker) when it's actually too long to fit — measured against its own
 // container, so a short name just sits still like normal text and nothing
@@ -4093,9 +4127,9 @@ function NotebookView({ inventory, categories, sales, apiUrl, token, onRecordSal
                       onChange={e => updateFlatRow(idx, 'quantity', Math.max(1, Number(e.target.value) || 1))}
                       style={{ width: '100%', padding: '9px 4px', borderRadius: 7, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_MONO, fontSize: 15, fontWeight: 700, textAlign: 'center' }}
                     />
-                    <input
+                    <WrappingInput
                       value={row.description} placeholder="Item name"
-                      onChange={e => updateFlatRow(idx, 'description', e.target.value)}
+                      onChange={val => updateFlatRow(idx, 'description', val)}
                       style={{ width: '100%', padding: '9px 10px', borderRadius: 7, border: `1px solid ${C.line}`, background: C.ink, color: C.paper, fontFamily: FONT_BODY, fontSize: 16, fontWeight: 600 }}
                     />
                     <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
